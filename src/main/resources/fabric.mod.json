@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "highspeedrail",
+  "version": "${version}",
+  "name": "highSpeedRail",
+  "description": "Server-side long powered-rail high-speed mode for rideable minecarts.",
+  "authors": ["TimePineapple"],
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "com.timepineapple.highspeedrail.HighSpeedRail"
+    ]
+  },
+  "mixins": [
+    "highspeedrail.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": "=0.19.3",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
