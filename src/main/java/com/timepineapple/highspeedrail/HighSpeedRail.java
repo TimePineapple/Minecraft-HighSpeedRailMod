@@ -26,9 +26,19 @@ public final class HighSpeedRail implements ModInitializer {
         return config;
     }
 
-    public static synchronized boolean reloadConfig() {
-        ModConfig.LoadResult result = ModConfig.load();
-        config = result.config();
-        return result.loadedFromDisk();
+    public static synchronized ModConfig.LoadResult reloadConfig() {
+        ModConfig.LoadResult result = ModConfig.load(config);
+        if (result.success()) {
+            config = result.config();
+        }
+        return result;
+    }
+
+    public static synchronized boolean installConfig(ModConfig next) {
+        if (next.validationError().isPresent() || !next.save()) {
+            return false;
+        }
+        config = next;
+        return true;
     }
 }

@@ -6,6 +6,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.timepineapple.highspeedrail.HighSpeedRail;
 import com.timepineapple.highspeedrail.config.ModConfig;
+import com.timepineapple.highspeedrail.minecart.SpeedProfile;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.permission.Permission;
 import net.minecraft.command.permission.PermissionCheck;
@@ -13,6 +14,8 @@ import net.minecraft.command.permission.PermissionLevel;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
+import net.minecraft.entity.vehicle.AbstractMinecartEntity;
+import net.minecraft.world.rule.GameRules;
 
 import java.util.function.Consumer;
 
@@ -31,7 +34,7 @@ public final class HighSpeedRailCommand {
                                 config -> config.enable = BoolArgumentType.getBool(context, "value")))))
                     .then(CommandManager.literal("maxSpeed")
                         .then(CommandManager.argument("value", DoubleArgumentType.doubleArg(0.4))
-                            .executes(context -> updateDouble(context, "maxSpeed", value -> value >= 0.4,
+                            .executes(context -> updateDouble(context, "maxSpeed", value -> value > 0.4,
                                 config -> config.maxSpeed = DoubleArgumentType.getDouble(context, "value")))))
                     .then(CommandManager.literal("activeBlocks")
                         .then(CommandManager.argument("value", IntegerArgumentType.integer(1))
@@ -40,25 +43,29 @@ public final class HighSpeedRailCommand {
                                 config -> config.activeBlocks = IntegerArgumentType.getInteger(context, "value")))))
                 )
                 .then(CommandManager.literal("reload").executes(context -> {
-                    boolean loaded = HighSpeedRail.reloadConfig();
-                    context.getSource().sendFeedback(
-                        () -> Text.literal(loaded
-                            ? "highSpeedRail configuration reloaded."
-                            : "highSpeedRail is using safe defaults; check the server log."),
-                        true
-                    );
-                    return loaded ? 1 : 0;
+                    ModConfig.LoadResult result = HighSpeedRail.reloadConfig();
+                    if (!result.success()) {
+                        return error(context, result.errorMessage());
+                    }
+                    context.getSource().sendFeedback(() -> Text.literal("highSpeedRail configuration reloaded."), true);
+                    return 1;
                 }))
         ));
     }
 
     private static int showConfig(CommandContext<ServerCommandSource> context) {
         ModConfig config = HighSpeedRail.config();
+        double vanillaLandSpeed = vanillaLandSpeed(context.getSource());
+        double baseAcceleration = SpeedProfile.baseAcceleration(config.maxSpeed, vanillaLandSpeed, config.activeBlocks);
         context.getSource().sendFeedback(() -> Text.literal(
             "highSpeedRail configuration:\n"
                 + "enable=" + config.enable + "\n"
                 + "maxSpeed=" + config.maxSpeed + "\n"
-                + "activeBlocks=" + config.activeBlocks
+                + "activeBlocks=" + config.activeBlocks + "\n"
+                + "v2(land)=" + vanillaLandSpeed + "\n"
+                + "baseAcceleration=" + baseAcceleration + "\n"
+                + "easing=smootherstep\n"
+                + "Water minecarts recalculate v2 and baseAcceleration per cart."
         ), false);
         return 1;
     }
@@ -71,7 +78,7 @@ public final class HighSpeedRailCommand {
     ) {
         double value = DoubleArgumentType.getDouble(context, "value");
         if (!Double.isFinite(value) || !validator.test(value)) {
-            return error(context, key + " has an invalid value.");
+            return error(context, "illegal value: " + key + " must be finite and greater than 0.4");
         }
         return update(context, key, String.valueOf(value), setter);
     }
@@ -82,10 +89,14 @@ public final class HighSpeedRailCommand {
         String value,
         Consumer<ModConfig> setter
     ) {
-        ModConfig config = HighSpeedRail.config();
-        setter.accept(config);
-        if (!config.save()) {
-            return error(context, "The live value changed, but writing highspeedrail.json failed. Check the server log.");
+        ModConfig updated = HighSpeedRail.config().copy();
+        setter.accept(updated);
+        java.util.Optional<String> validationError = updated.validationError();
+        if (validationError.isPresent()) {
+            return error(context, "illegal value: " + validationError.get());
+        }
+        if (!HighSpeedRail.installConfig(updated)) {
+            return error(context, "Could not write highspeedrail.json. The previous value remains active.");
         }
         context.getSource().sendFeedback(
             () -> Text.literal("highSpeedRail: " + key + "=" + value),
@@ -97,6 +108,13 @@ public final class HighSpeedRailCommand {
     private static int error(CommandContext<ServerCommandSource> context, String message) {
         context.getSource().sendError(Text.literal(message));
         return 0;
+    }
+
+    private static double vanillaLandSpeed(ServerCommandSource source) {
+        if (!AbstractMinecartEntity.areMinecartImprovementsEnabled(source.getWorld())) {
+            return 0.4;
+        }
+        return source.getWorld().getGameRules().getValue(GameRules.MAX_MINECART_SPEED) / 20.0;
     }
 
     private HighSpeedRailCommand() {

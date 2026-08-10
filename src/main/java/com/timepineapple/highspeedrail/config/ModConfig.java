@@ -13,6 +13,7 @@ import java.io.Reader;
 import java.io.Writer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 
 public final class ModConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -28,12 +29,14 @@ public final class ModConfig {
         return new ModConfig();
     }
 
-    public static LoadResult load() {
+    public static LoadResult load(ModConfig lastValidConfig) {
         Path sourcePath = Files.exists(CONFIG_PATH) ? CONFIG_PATH : LEGACY_CONFIG_PATH;
         if (Files.notExists(sourcePath)) {
             ModConfig defaults = defaults();
-            write(defaults);
-            return new LoadResult(defaults, false);
+            if (!write(defaults)) {
+                return new LoadResult(lastValidConfig, false, "Could not create highspeedrail.json.");
+            }
+            return new LoadResult(defaults, true, null);
         }
 
         try (Reader reader = Files.newBufferedReader(sourcePath)) {
@@ -44,15 +47,20 @@ public final class ModConfig {
             }
 
             migrateLegacyNames(root, parsed);
-            parsed.validate();
+            Optional<String> validationError = parsed.validationError();
+            if (validationError.isPresent()) {
+                String message = validationError.get();
+                HighSpeedRail.LOGGER.warn("illegal value in {}: {}", sourcePath, message);
+                return new LoadResult(lastValidConfig, false, "illegal value: " + message);
+            }
             // Always rewrite with the canonical three-key schema. Gson ignores legacy keys while reading.
-            write(parsed);
-            return new LoadResult(parsed, true);
+            if (!write(parsed)) {
+                return new LoadResult(lastValidConfig, false, "Could not write highspeedrail.json.");
+            }
+            return new LoadResult(parsed, true, null);
         } catch (IOException | RuntimeException exception) {
-            HighSpeedRail.LOGGER.warn("Could not read {}. Safe defaults will be used: {}", sourcePath, exception.getMessage());
-            ModConfig defaults = defaults();
-            write(defaults);
-            return new LoadResult(defaults, false);
+            HighSpeedRail.LOGGER.warn("Could not read {}. The last valid configuration remains active: {}", sourcePath, exception.getMessage());
+            return new LoadResult(lastValidConfig, false, "Could not read highspeedrail.json: " + exception.getMessage());
         }
     }
 
@@ -60,28 +68,35 @@ public final class ModConfig {
         return Math.max(maxSpeed, vanillaMaxSpeed);
     }
 
-    public double derivedSpeedChangePerTick(double vanillaMaxSpeed) {
-        double effectiveMax = effectiveMaxSpeed(vanillaMaxSpeed);
-        double change = (effectiveMax - vanillaMaxSpeed) * (effectiveMax + vanillaMaxSpeed)
+    public double derivedBaseAcceleration(double vanillaMaxSpeed) {
+        if (maxSpeed <= vanillaMaxSpeed) {
+            return 0.0;
+        }
+        double acceleration = (maxSpeed - vanillaMaxSpeed) * (maxSpeed + vanillaMaxSpeed)
             / (2.0 * activeBlocks);
-        return Double.isFinite(change) ? change : effectiveMax - vanillaMaxSpeed;
+        return Double.isFinite(acceleration) ? acceleration : 0.0;
     }
 
     public boolean save() {
         return write(this);
     }
 
-    private void validate() {
-        ModConfig defaults = defaults();
+    public ModConfig copy() {
+        ModConfig copy = new ModConfig();
+        copy.enable = enable;
+        copy.maxSpeed = maxSpeed;
+        copy.activeBlocks = activeBlocks;
+        return copy;
+    }
 
-        if (!Double.isFinite(maxSpeed) || maxSpeed < FALLBACK_VANILLA_MAX_SPEED) {
-            warn("maxSpeed", maxSpeed, defaults.maxSpeed);
-            maxSpeed = defaults.maxSpeed;
+    public Optional<String> validationError() {
+        if (!Double.isFinite(maxSpeed) || maxSpeed <= FALLBACK_VANILLA_MAX_SPEED) {
+            return Optional.of("maxSpeed must be finite and greater than 0.4");
         }
         if (activeBlocks < 1) {
-            warn("activeBlocks", activeBlocks, defaults.activeBlocks);
-            activeBlocks = defaults.activeBlocks;
+            return Optional.of("activeBlocks must be at least 1");
         }
+        return Optional.empty();
     }
 
     private static void migrateLegacyNames(JsonObject root, ModConfig config) {
@@ -109,10 +124,6 @@ public final class ModConfig {
         }
     }
 
-    private static void warn(String key, Object invalid, Object replacement) {
-        HighSpeedRail.LOGGER.warn("Invalid config value {}={}; using {}", key, invalid, replacement);
-    }
-
-    public record LoadResult(ModConfig config, boolean loadedFromDisk) {
+    public record LoadResult(ModConfig config, boolean success, String errorMessage) {
     }
 }

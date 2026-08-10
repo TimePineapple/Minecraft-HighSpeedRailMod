@@ -34,6 +34,18 @@ tasks.withType(JavaCompile).configureEach {
     options.release = 21
 }
 
+tasks.register('speedProfileTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.timepineapple.highspeedrail.minecart.SpeedProfileSelfTest'
+}
+
+tasks.named('test') {
+    failOnNoDiscoveredTests = false
+}
+
+check.dependsOn speedProfileTest
+
 java {
     withSourcesJar()
     sourceCompatibility = JavaVersion.VERSION_21

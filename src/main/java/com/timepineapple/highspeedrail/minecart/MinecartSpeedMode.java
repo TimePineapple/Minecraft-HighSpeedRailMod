@@ -4,5 +4,6 @@ public enum MinecartSpeedMode {
     NORMAL,
     ACCELERATING,
     HIGH_SPEED,
-    DECELERATING
+    DECELERATING,
+    BRAKE_HOLD
 }
