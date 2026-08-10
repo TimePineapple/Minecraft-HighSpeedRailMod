@@ -21,7 +21,7 @@ Loader 和 Fabric API 使用不同的版本编号。本项目要求 Fabric Loade
 
 1. 建立 Minecraft 1.21.11 Fabric Dedicated Server，并使用 Fabric Loader 0.19.3。
 2. 将兼容 1.21.11 的 Fabric API JAR 放入服务器 `mods/`。
-3. 将 `highspeedrail-1.1.0.jar` 放入服务器 `mods/`。
+3. 将 `highspeedrail-1.1.1.jar` 放入服务器 `mods/`。
 4. 启动服务器。客户端不安装 highSpeedRail，也不需要 Fabric API。
 
 模组不注册方块、物品、实体或自定义网络 payload。矿车的位置和速度仅通过原版实体 tracking 数据同步给客户端。
@@ -54,7 +54,9 @@ config/highspeedrail.json
 
 `maxSpeed` 必须为有限数且严格大于 `0.4`，`activeBlocks` 必须至少为 `1`。非法指令会返回 `illegal value` 且不修改实时值或 JSON；非法 `reload` 会保留最后一组合法配置。运行时若实验 controller 的原版速度上限高于 `maxSpeed`，模组不会降低原版上限。
 
-加速度、减速度和扫描距离均不再是配置项。模组按 `a=(maxSpeed²-v2²)/(2×activeBlocks)` 实时计算加减速共用的基准加速度，再使用 `smootherstep` 按实际经过的连续轨道格距离缓入缓出。默认陆地 `v2=0.4` 时基准 `a=0.04`；从 `0.4` 到 `1.2` 需要 16 格，从静止理论上需要 18 格，制动从 `1.2` 到 `0.4` 精确规划为 16 格。
+加速度、减速度和扫描距离均不是配置项。模组先计算要求的平均加速度 `Areq=(maxSpeed²-v2²)/(2×activeBlocks)`，再使用 `A=max(Areq, 0.06)`，保证模组控制阶段不低于原版动力铁轨的 `0.06 blocks/tick²`。加速段的加速度按轨道距离从 `0.06` 线性增加到 `2A-0.06`；减速段完全镜像，从 `2A-0.06` 逐渐降低到 `0.06`。当 `Areq<0.06` 时采用恒定 `0.06`，因此会早于 `activeBlocks` 到达目标速度并保持。
+
+例如陆地 `v2=0.4`、`maxSpeed=4`、`activeBlocks=64` 时，`Areq=A=0.12375`，加速度从 `0.06` 增至 `0.1875`，减速反向变化，两个阶段都精确使用 64 格。默认 `maxSpeed=1.2`、`activeBlocks=16` 的 `Areq=0.04` 低于原版下限，因此实际使用恒定 `0.06`，从 `0.4` 到 `1.2` 约需 `10.667` 格，从静止理论上需要 12 格。
 
 管理员可实时查看或修改配置。`set` 成功后立即影响已加载矿车，并写回 JSON，重启后仍保留：
 
@@ -77,9 +79,9 @@ NORMAL -> ACCELERATING -> HIGH_SPEED -> DECELERATING -> BRAKE_HOLD -> NORMAL
 ```
 
 - `NORMAL`：完全使用原版速度上限。原版先为静止矿车产生非零方向，模组随后可从实际速度接管。
-- `ACCELERATING`：剩余连续动力铁轨距离超过 `activeBlocks` 时启动，按实际起速和轨道格进度计算平滑速度曲线。
+- `ACCELERATING`：剩余连续动力铁轨距离超过 `activeBlocks` 时启动，按实际起速和轨道格进度使用加速度单调增加的速度曲线。
 - `HIGH_SPEED`：允许并保持 `maxSpeed`。
-- `DECELERATING`：按当前速度实时计算所需制动距离；正常从 `maxSpeed` 制动时等于 `activeBlocks`，超速或参数变化时可以更早开始，但基准 `a` 不变。
+- `DECELERATING`：按当前速度实时计算所需制动距离；制动力按加速曲线反向变化，前段强、后段逐渐降至原版加速度。`Areq>=0.06` 时正常制动距离等于 `activeBlocks`，否则会更短。
 - `BRAKE_HOLD`：提前到达原版上限后保持该速度直到动力段末端；只有线路延长到足以再次完成加速和制动时才恢复加速。
 
 每辆矿车的状态存储在 Mixin 注入的运行时字段中，不写入世界存档。字段与实体生命周期一致，实体卸载或移除后可正常回收，不使用全局强引用 Map。
@@ -131,7 +133,7 @@ Minecraft 1.21.11 的实验 controller 通过同一个 `AbstractMinecartEntity#g
 生成文件：
 
 ```text
-build/libs/highspeedrail-1.1.0.jar
+build/libs/highspeedrail-1.1.1.jar
 ```
 
 详细人工验收步骤见 [TESTING.md](TESTING.md)。

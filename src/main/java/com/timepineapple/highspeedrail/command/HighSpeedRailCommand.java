@@ -56,16 +56,23 @@ public final class HighSpeedRailCommand {
     private static int showConfig(CommandContext<ServerCommandSource> context) {
         ModConfig config = HighSpeedRail.config();
         double vanillaLandSpeed = vanillaLandSpeed(context.getSource());
-        double baseAcceleration = SpeedProfile.baseAcceleration(config.maxSpeed, vanillaLandSpeed, config.activeBlocks);
+        double requestedAverageAcceleration = SpeedProfile.baseAcceleration(
+            config.maxSpeed, vanillaLandSpeed, config.activeBlocks
+        );
+        double effectiveAverageAcceleration = SpeedProfile.effectiveAverageAcceleration(requestedAverageAcceleration);
+        double finalAcceleration = SpeedProfile.finalAcceleration(requestedAverageAcceleration);
         context.getSource().sendFeedback(() -> Text.literal(
             "highSpeedRail configuration:\n"
                 + "enable=" + config.enable + "\n"
                 + "maxSpeed=" + config.maxSpeed + "\n"
                 + "activeBlocks=" + config.activeBlocks + "\n"
                 + "v2(land)=" + vanillaLandSpeed + "\n"
-                + "baseAcceleration=" + baseAcceleration + "\n"
-                + "easing=smootherstep\n"
-                + "Water minecarts recalculate v2 and baseAcceleration per cart."
+                + "requestedAverageAcceleration=" + requestedAverageAcceleration + "\n"
+                + "effectiveAverageAcceleration=" + effectiveAverageAcceleration + "\n"
+                + "initialAcceleration=" + SpeedProfile.VANILLA_POWERED_RAIL_ACCELERATION + "\n"
+                + "finalAcceleration=" + finalAcceleration + "\n"
+                + "profile=linear-distance-mirrored\n"
+                + "Water minecarts recalculate v2 and average acceleration per cart."
         ), false);
         return 1;
     }
