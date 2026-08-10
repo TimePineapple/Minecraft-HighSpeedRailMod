@@ -6,7 +6,9 @@ public final class SpeedProfileSelfTest {
 
     public static void main(String[] args) {
         testRequestedFourOverSixtyFourBlocks();
+        testRequestedFourOverOneHundredTwentyEightBlocks();
         testVanillaAccelerationFloor();
+        testUnloadedChunkKeepsStableConfirmedDistance();
     }
 
     private static void testRequestedFourOverSixtyFourBlocks() {
@@ -43,6 +45,74 @@ public final class SpeedProfileSelfTest {
         requireClose(SpeedProfile.distance(0.0, maxSpeed, requestedAverage), 12.0,
             "stationary theoretical distance at vanilla floor");
         verifyLinearMirroredProfile(vanillaSpeed, maxSpeed, distance, 0.06, 0.06);
+    }
+
+    private static void testRequestedFourOverOneHundredTwentyEightBlocks() {
+        double vanillaSpeed = 0.4;
+        double maxSpeed = 4.0;
+        int activeBlocks = 128;
+        double requestedAverage = SpeedProfile.baseAcceleration(maxSpeed, vanillaSpeed, activeBlocks);
+        double effectiveAverage = SpeedProfile.effectiveAverageAcceleration(requestedAverage);
+        double distance = SpeedProfile.distance(vanillaSpeed, maxSpeed, requestedAverage);
+
+        requireClose(requestedAverage, 0.061875, "requested average acceleration for 4/128");
+        requireClose(effectiveAverage, 0.061875, "effective average acceleration for 4/128");
+        requireClose(SpeedProfile.finalAcceleration(requestedAverage), 0.06375,
+            "final acceleration for 4/128");
+        requireClose(distance, activeBlocks, "v2 to v1 distance for 4/128");
+        requireClose(SpeedProfile.distance(maxSpeed, vanillaSpeed, requestedAverage), activeBlocks,
+            "v1 to v2 distance for 4/128");
+        verifyLinearMirroredProfile(vanillaSpeed, maxSpeed, distance, 0.06, 0.06375);
+    }
+
+    private static void testUnloadedChunkKeepsStableConfirmedDistance() {
+        RailPathScanner.PoweredPath belowThreshold =
+            new RailPathScanner.PoweredPath(127.0, false, true);
+        RailPathScanner.PoweredPath atThreshold =
+            new RailPathScanner.PoweredPath(128.0, false, true);
+        RailPathScanner.PoweredPath beyondThreshold =
+            new RailPathScanner.PoweredPath(129.0, false, true);
+
+        requireClose(MinecartSpeedManager.confirmedPoweredDistance(beyondThreshold), 129.0,
+            "unloaded chunk keeps confirmed powered distance");
+        require(!MinecartSpeedManager.hasActivationDistance(true, belowThreshold, 128),
+            "127 confirmed blocks must not activate");
+        require(!MinecartSpeedManager.hasActivationDistance(true, atThreshold, 128),
+            "128 confirmed blocks must preserve the strict activation threshold");
+        require(MinecartSpeedManager.hasActivationDistance(true, beyondThreshold, 128),
+            "129 confirmed blocks must activate before an unloaded chunk");
+        require(!MinecartSpeedManager.hasActivationDistance(false, beyondThreshold, 128),
+            "activation still requires the current powered rail");
+
+        double carriedDistance = MinecartSpeedManager.confirmedDistanceAfterTravel(160.0, 4.0);
+        requireClose(carriedDistance, 156.0, "confirmed distance advances with the cart");
+        requireClose(
+            MinecartSpeedManager.stabilizedConfirmedPoweredDistance(belowThreshold, carriedDistance, true),
+            156.0,
+            "temporary unloaded boundary regression keeps previously confirmed rails"
+        );
+        requireClose(
+            MinecartSpeedManager.stabilizedConfirmedPoweredDistance(beyondThreshold, 160.0, false),
+            129.0,
+            "normal mode cannot activate from stale carried distance"
+        );
+
+        RailPathScanner.PoweredPath knownEnd =
+            new RailPathScanner.PoweredPath(120.0, true, false);
+        requireClose(
+            MinecartSpeedManager.stabilizedConfirmedPoweredDistance(knownEnd, carriedDistance, true),
+            120.0,
+            "a known rail end immediately replaces carried distance"
+        );
+
+        require(MinecartSpeedManager.shouldBrakeForConfirmedDistance(true, 129.0, 130.0),
+            "unknown rails beyond current and carried confirmation are never assumed");
+        require(!MinecartSpeedManager.shouldBrakeForConfirmedDistance(true, carriedDistance, 130.0),
+            "sufficient confirmed distance must not force early braking");
+        require(MinecartSpeedManager.shouldBrakeForConfirmedDistance(true, 120.0, 130.0),
+            "a known end inside braking distance must force braking");
+        require(MinecartSpeedManager.shouldBrakeForConfirmedDistance(false, carriedDistance, 120.0),
+            "an unpowered current rail must force braking");
     }
 
     private static void verifyLinearMirroredProfile(

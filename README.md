@@ -21,7 +21,7 @@ Loader 和 Fabric API 使用不同的版本编号。本项目要求 Fabric Loade
 
 1. 建立 Minecraft 1.21.11 Fabric Dedicated Server，并使用 Fabric Loader 0.19.3。
 2. 将兼容 1.21.11 的 Fabric API JAR 放入服务器 `mods/`。
-3. 将 `highspeedrail-1.1.1.jar` 放入服务器 `mods/`。
+3. 将 `highspeedrail-1.1.2.jar` 放入服务器 `mods/`。
 4. 启动服务器。客户端不安装 highSpeedRail，也不需要 Fabric API。
 
 模组不注册方块、物品、实体或自定义网络 payload。矿车的位置和速度仅通过原版实体 tracking 数据同步给客户端。
@@ -96,7 +96,7 @@ NORMAL -> ACCELERATING -> HIGH_SPEED -> DECELERATING -> BRAKE_HOLD -> NORMAL
 
 扫描只把精确的 `Blocks.POWERED_RAIL` 且 `POWERED=true` 计入。1.21.11 的 Activator Rail 也使用 `PoweredRailBlock` 类，因此额外检查具体 block，确保 Activator/Detector/普通/未供电铁轨都不计数。
 
-扫描复用 `BlockPos.Mutable`，不建立路径 List；每格轨道映射为连续的 `0..1` 进度，弯轨和坡轨也各计一格。单 tick 跨越多格或跨过制动边界时会按真实路径进度拆分计算。目标 chunk 未加载时调用 `isChunkLoaded` 后保守停止，不生成或强制加载区块。
+扫描复用 `BlockPos.Mutable`，不建立路径 List；每格轨道映射为连续的 `0..1` 进度，弯轨和坡轨也各计一格。单 tick 跨越多格或跨过制动边界时会按真实路径进度拆分计算。目标 chunk 未加载时调用 `isChunkLoaded` 后停止扫描，不生成或强制加载区块。临时的区块边界波动会沿用上一 tick 已确认、并扣除实际行驶距离后的动力铁轨距离；扫描确认真实终点、断轨或未供电铁轨时立即采用更短的当前距离。
 
 ### 原版速度上限与 Mixin
 
@@ -133,7 +133,7 @@ Minecraft 1.21.11 的实验 controller 通过同一个 `AbstractMinecartEntity#g
 生成文件：
 
 ```text
-build/libs/highspeedrail-1.1.1.jar
+build/libs/highspeedrail-1.1.2.jar
 ```
 
 详细人工验收步骤见 [TESTING.md](TESTING.md)。

@@ -56,7 +56,11 @@ public final class MinecartSpeedManager {
         RailPathScanner.PoweredPath poweredPath = RailPathScanner.scanPoweredDistanceAhead(
             world, railPos, position, velocity, scanLimit
         );
-        double remainingPoweredDistance = poweredPath.stoppedAtUnloadedChunk() ? 0.0 : poweredPath.distance();
+        double remainingPoweredDistance = stabilizedConfirmedPoweredDistance(
+            poweredPath,
+            state.poweredDistanceBeforeVanillaTick(),
+            state.mode() != MinecartSpeedMode.NORMAL
+        );
         state.setPoweredDistanceBeforeVanillaTick(remainingPoweredDistance);
 
         if (!state.parametersMatch(config.maxSpeed, config.activeBlocks, vanillaMax)) {
@@ -67,13 +71,13 @@ public final class MinecartSpeedManager {
         boolean currentPowered = RailPathScanner.isPoweredRail(railState);
         switch (state.mode()) {
             case NORMAL -> {
-                if (currentPowered && remainingPoweredDistance > config.activeBlocks + SPEED_EPSILON) {
+                if (hasActivationDistance(currentPowered, poweredPath, config.activeBlocks)) {
                     startAcceleration(cart, state, speed, config.maxSpeed, baseAcceleration, vanillaMax, remainingPoweredDistance);
                 }
             }
             case ACCELERATING, HIGH_SPEED -> {
                 double required = SpeedProfile.distance(Math.max(speed, vanillaMax), vanillaMax, baseAcceleration);
-                if (!currentPowered || remainingPoweredDistance <= required + SPEED_EPSILON) {
+                if (shouldBrakeForConfirmedDistance(currentPowered, remainingPoweredDistance, required)) {
                     startDeceleration(cart, state, speed, vanillaMax, baseAcceleration, true, vanillaMax, remainingPoweredDistance);
                 }
             }
@@ -86,7 +90,7 @@ public final class MinecartSpeedManager {
                     }
                 } else {
                     double requiredBrake = SpeedProfile.distance(Math.max(speed, vanillaMax), vanillaMax, baseAcceleration);
-                    if (!currentPowered || remainingPoweredDistance <= requiredBrake + SPEED_EPSILON) {
+                    if (shouldBrakeForConfirmedDistance(currentPowered, remainingPoweredDistance, requiredBrake)) {
                         startDeceleration(cart, state, speed, vanillaMax, baseAcceleration, true, vanillaMax, remainingPoweredDistance);
                     }
                 }
@@ -176,6 +180,9 @@ public final class MinecartSpeedManager {
         );
         double targetSpeed = advancePhase(cart, state, phaseTravel, config.maxSpeed, state.vanillaMaxSpeed());
         applyTargetVelocity(cart, afterVelocity, tangent, targetSpeed, onRail);
+        state.setPoweredDistanceBeforeVanillaTick(
+            confirmedDistanceAfterTravel(state.poweredDistanceBeforeVanillaTick(), travelled)
+        );
     }
 
     public static double speedCap(MinecartEntity cart, double vanillaReturnValue) {
@@ -448,6 +455,44 @@ public final class MinecartSpeedManager {
 
     private static boolean isFinite(Vec3d vector) {
         return Double.isFinite(vector.x) && Double.isFinite(vector.y) && Double.isFinite(vector.z);
+    }
+
+    static double confirmedPoweredDistance(RailPathScanner.PoweredPath poweredPath) {
+        return Math.max(0.0, poweredPath.distance());
+    }
+
+    static double stabilizedConfirmedPoweredDistance(
+        RailPathScanner.PoweredPath poweredPath,
+        double carriedConfirmedDistance,
+        boolean carryForward
+    ) {
+        double scannedDistance = confirmedPoweredDistance(poweredPath);
+        if (!carryForward || poweredPath.reachedEnd()) {
+            return scannedDistance;
+        }
+        return Math.max(scannedDistance, Math.max(0.0, carriedConfirmedDistance));
+    }
+
+    static double confirmedDistanceAfterTravel(double confirmedDistance, double travelled) {
+        return Math.max(0.0, confirmedDistance - Math.max(0.0, travelled));
+    }
+
+    static boolean hasActivationDistance(
+        boolean currentPowered,
+        RailPathScanner.PoweredPath poweredPath,
+        int activeBlocks
+    ) {
+        return currentPowered
+            && confirmedPoweredDistance(poweredPath) > activeBlocks + SPEED_EPSILON;
+    }
+
+    static boolean shouldBrakeForConfirmedDistance(
+        boolean currentPowered,
+        double confirmedDistance,
+        double requiredBrakeDistance
+    ) {
+        return !currentPowered
+            || confirmedDistance <= requiredBrakeDistance + SPEED_EPSILON;
     }
 
     private MinecartSpeedManager() {
