@@ -5,169 +5,170 @@ public final class SpeedProfileSelfTest {
     private static final int SAMPLE_COUNT = 256;
 
     public static void main(String[] args) {
-        testRequestedFourOverSixtyFourBlocks();
-        testRequestedFourOverOneHundredTwentyEightBlocks();
-        testVanillaAccelerationFloor();
-        testUnloadedChunkKeepsStableConfirmedDistance();
+        testConfiguredAccelerationFromZero();
+        testArbitraryStartUsesTheSameAcceleration();
+        testLiveSecondsWaitForTheNextPhase();
+        testConstantRailEndBraking();
+        testActivationCountsOnlyFullRailsAhead();
+        testUnloadedBoundaryDoesNotLowerThresholdOrBrake();
+        testBrakeBoundaryAndFinalRailTarget();
     }
 
-    private static void testRequestedFourOverSixtyFourBlocks() {
-        double vanillaSpeed = 0.4;
-        double maxSpeed = 4.0;
-        int activeBlocks = 64;
-        double requestedAverage = SpeedProfile.baseAcceleration(maxSpeed, vanillaSpeed, activeBlocks);
-        double effectiveAverage = SpeedProfile.effectiveAverageAcceleration(requestedAverage);
-        double distance = SpeedProfile.distance(vanillaSpeed, maxSpeed, requestedAverage);
-
-        requireClose(requestedAverage, 0.12375, "requested average acceleration for 4/64");
-        requireClose(effectiveAverage, 0.12375, "effective average acceleration for 4/64");
-        requireClose(SpeedProfile.finalAcceleration(requestedAverage), 0.1875, "final acceleration for 4/64");
-        requireClose(distance, activeBlocks, "v2 to v1 distance for 4/64");
-        requireClose(SpeedProfile.distance(maxSpeed, vanillaSpeed, requestedAverage), activeBlocks,
-            "v1 to v2 distance for 4/64");
-        verifyLinearMirroredProfile(vanillaSpeed, maxSpeed, distance, 0.06, 0.1875);
-    }
-
-    private static void testVanillaAccelerationFloor() {
-        double vanillaSpeed = 0.4;
-        double maxSpeed = 1.2;
-        int activeBlocks = 16;
-        double requestedAverage = SpeedProfile.baseAcceleration(maxSpeed, vanillaSpeed, activeBlocks);
-        double distance = SpeedProfile.distance(vanillaSpeed, maxSpeed, requestedAverage);
-
-        requireClose(requestedAverage, 0.04, "requested average acceleration below vanilla");
-        requireClose(SpeedProfile.effectiveAverageAcceleration(requestedAverage), 0.06,
-            "effective average acceleration floor");
-        requireClose(SpeedProfile.finalAcceleration(requestedAverage), 0.06,
-            "constant acceleration at vanilla floor");
-        requireClose(distance, 32.0 / 3.0, "early arrival distance at vanilla floor");
-        require(distance < activeBlocks, "vanilla acceleration floor must arrive before activeBlocks");
-        requireClose(SpeedProfile.distance(0.0, maxSpeed, requestedAverage), 12.0,
-            "stationary theoretical distance at vanilla floor");
-        verifyLinearMirroredProfile(vanillaSpeed, maxSpeed, distance, 0.06, 0.06);
-    }
-
-    private static void testRequestedFourOverOneHundredTwentyEightBlocks() {
-        double vanillaSpeed = 0.4;
-        double maxSpeed = 4.0;
-        int activeBlocks = 128;
-        double requestedAverage = SpeedProfile.baseAcceleration(maxSpeed, vanillaSpeed, activeBlocks);
-        double effectiveAverage = SpeedProfile.effectiveAverageAcceleration(requestedAverage);
-        double distance = SpeedProfile.distance(vanillaSpeed, maxSpeed, requestedAverage);
-
-        requireClose(requestedAverage, 0.061875, "requested average acceleration for 4/128");
-        requireClose(effectiveAverage, 0.061875, "effective average acceleration for 4/128");
-        requireClose(SpeedProfile.finalAcceleration(requestedAverage), 0.06375,
-            "final acceleration for 4/128");
-        requireClose(distance, activeBlocks, "v2 to v1 distance for 4/128");
-        requireClose(SpeedProfile.distance(maxSpeed, vanillaSpeed, requestedAverage), activeBlocks,
-            "v1 to v2 distance for 4/128");
-        verifyLinearMirroredProfile(vanillaSpeed, maxSpeed, distance, 0.06, 0.06375);
-    }
-
-    private static void testUnloadedChunkKeepsStableConfirmedDistance() {
-        RailPathScanner.PoweredPath belowThreshold =
-            new RailPathScanner.PoweredPath(127.0, false, true);
-        RailPathScanner.PoweredPath atThreshold =
-            new RailPathScanner.PoweredPath(128.0, false, true);
-        RailPathScanner.PoweredPath beyondThreshold =
-            new RailPathScanner.PoweredPath(129.0, false, true);
-
-        requireClose(MinecartSpeedManager.confirmedPoweredDistance(beyondThreshold), 129.0,
-            "unloaded chunk keeps confirmed powered distance");
-        require(!MinecartSpeedManager.hasActivationDistance(true, belowThreshold, 128),
-            "127 confirmed blocks must not activate");
-        require(!MinecartSpeedManager.hasActivationDistance(true, atThreshold, 128),
-            "128 confirmed blocks must preserve the strict activation threshold");
-        require(MinecartSpeedManager.hasActivationDistance(true, beyondThreshold, 128),
-            "129 confirmed blocks must activate before an unloaded chunk");
-        require(!MinecartSpeedManager.hasActivationDistance(false, beyondThreshold, 128),
-            "activation still requires the current powered rail");
-
-        double carriedDistance = MinecartSpeedManager.confirmedDistanceAfterTravel(160.0, 4.0);
-        requireClose(carriedDistance, 156.0, "confirmed distance advances with the cart");
+    private static void testConfiguredAccelerationFromZero() {
+        double acceleration = SpeedProfile.configuredAcceleration(1.2, 5);
+        requireClose(acceleration, 0.012, "default configured acceleration");
         requireClose(
-            MinecartSpeedManager.stabilizedConfirmedPoweredDistance(belowThreshold, carriedDistance, true),
-            156.0,
-            "temporary unloaded boundary regression keeps previously confirmed rails"
+            SpeedProfile.moveTowards(0.0, 1.2, acceleration, 99.0),
+            1.188,
+            "speed after 99 ticks"
         );
         requireClose(
-            MinecartSpeedManager.stabilizedConfirmedPoweredDistance(beyondThreshold, 160.0, false),
-            129.0,
-            "normal mode cannot activate from stale carried distance"
+            SpeedProfile.moveTowards(0.0, 1.2, acceleration, 100.0),
+            1.2,
+            "zero to maxSpeed in 100 ticks"
         );
-
-        RailPathScanner.PoweredPath knownEnd =
-            new RailPathScanner.PoweredPath(120.0, true, false);
         requireClose(
-            MinecartSpeedManager.stabilizedConfirmedPoweredDistance(knownEnd, carriedDistance, true),
-            120.0,
-            "a known rail end immediately replaces carried distance"
+            SpeedProfile.moveTowards(0.0, 1.2, acceleration, 200.0),
+            1.2,
+            "configured max clamps later ticks"
         );
-
-        require(MinecartSpeedManager.shouldBrakeForConfirmedDistance(true, 129.0, 130.0),
-            "unknown rails beyond current and carried confirmation are never assumed");
-        require(!MinecartSpeedManager.shouldBrakeForConfirmedDistance(true, carriedDistance, 130.0),
-            "sufficient confirmed distance must not force early braking");
-        require(MinecartSpeedManager.shouldBrakeForConfirmedDistance(true, 120.0, 130.0),
-            "a known end inside braking distance must force braking");
-        require(MinecartSpeedManager.shouldBrakeForConfirmedDistance(false, carriedDistance, 120.0),
-            "an unpowered current rail must force braking");
     }
 
-    private static void verifyLinearMirroredProfile(
-        double startSpeed,
-        double targetSpeed,
-        double totalDistance,
-        double expectedInitialAcceleration,
-        double expectedFinalAcceleration
-    ) {
-        requireClose(SpeedProfile.speedAt(startSpeed, targetSpeed, 0.0, totalDistance), startSpeed,
-            "acceleration start speed");
-        requireClose(SpeedProfile.speedAt(startSpeed, targetSpeed, totalDistance, totalDistance), targetSpeed,
-            "acceleration end speed");
-        requireClose(SpeedProfile.speedAt(targetSpeed, startSpeed, totalDistance, totalDistance), startSpeed,
-            "braking end speed");
+    private static void testArbitraryStartUsesTheSameAcceleration() {
+        double acceleration = SpeedProfile.configuredAcceleration(1.2, 5);
+        double ticksFromVanilla = (1.2 - 0.4) / acceleration;
+        requireClose(ticksFromVanilla, 200.0 / 3.0, "remaining ticks from vanilla speed");
+        requireClose(
+            SpeedProfile.moveTowards(0.4, 1.2, acceleration, ticksFromVanilla),
+            1.2,
+            "arbitrary start reaches max with fixed acceleration"
+        );
+        requireClose(
+            SpeedProfile.moveTowards(2.0, 1.2, acceleration, ticksFromVanilla),
+            1.2,
+            "live max reduction uses the same acceleration magnitude"
+        );
+        require(
+            acceleration < 0.06,
+            "the old vanilla powered-rail acceleration floor must not remain"
+        );
+    }
 
-        double stepDistance = totalDistance / SAMPLE_COUNT;
-        double previousAccelerationSpeed = startSpeed;
-        double previousBrakingSpeed = targetSpeed;
-        double previousAcceleration = Double.NEGATIVE_INFINITY;
-        double previousBrakingMagnitude = Double.POSITIVE_INFINITY;
+    private static void testLiveSecondsWaitForTheNextPhase() {
+        MinecartSpeedState state = new MinecartSpeedState();
+        double fiveSecondAcceleration = SpeedProfile.configuredAcceleration(1.2, 5);
+        state.setTimedPhase(0.4, 1.2, fiveSecondAcceleration);
+
+        double tenSecondAcceleration = SpeedProfile.configuredAcceleration(1.2, 10);
+        requireClose(state.phaseAcceleration(), fiveSecondAcceleration,
+            "active phase keeps its acceleration snapshot");
+        requireClose(tenSecondAcceleration, 0.006, "next phase uses the new seconds value");
+    }
+
+    private static void testConstantRailEndBraking() {
+        double startSpeed = 4.0;
+        double targetSpeed = 0.4;
+        double distance = 15.0;
+        double acceleration = SpeedProfile.brakingAcceleration(startSpeed, targetSpeed, distance);
+        requireClose(acceleration, 0.528, "constant braking acceleration");
+        requireClose(
+            SpeedProfile.distance(startSpeed, targetSpeed, acceleration),
+            distance,
+            "braking distance round trip"
+        );
+        requireClose(
+            SpeedProfile.speedAt(startSpeed, targetSpeed, distance, distance),
+            targetSpeed,
+            "final powered rail entry speed"
+        );
+
+        double stepDistance = distance / SAMPLE_COUNT;
+        double previousSpeed = startSpeed;
         for (int step = 1; step <= SAMPLE_COUNT; step++) {
-            double distance = stepDistance * step;
-            double accelerating = SpeedProfile.speedAt(startSpeed, targetSpeed, distance, totalDistance);
-            double braking = SpeedProfile.speedAt(targetSpeed, startSpeed, distance, totalDistance);
-            double acceleration = (accelerating * accelerating
-                - previousAccelerationSpeed * previousAccelerationSpeed) / (2.0 * stepDistance);
-            double brakingMagnitude = (previousBrakingSpeed * previousBrakingSpeed
-                - braking * braking) / (2.0 * stepDistance);
-
-            require(acceleration + EPSILON >= expectedInitialAcceleration,
-                "acceleration must never fall below the vanilla floor");
-            require(acceleration + EPSILON >= previousAcceleration,
-                "acceleration must only increase");
-            require(brakingMagnitude + EPSILON >= expectedInitialAcceleration,
-                "braking magnitude must never fall below the vanilla floor");
-            require(brakingMagnitude <= previousBrakingMagnitude + EPSILON,
-                "braking magnitude must only decrease");
-
-            double mirroredBraking = SpeedProfile.speedAt(
-                targetSpeed, startSpeed, totalDistance - distance, totalDistance
+            double speed = SpeedProfile.speedAt(
+                startSpeed,
+                targetSpeed,
+                stepDistance * step,
+                distance
             );
-            requireClose(accelerating, mirroredBraking, "distance-mirrored speed");
-            previousAccelerationSpeed = accelerating;
-            previousBrakingSpeed = braking;
-            previousAcceleration = acceleration;
-            previousBrakingMagnitude = brakingMagnitude;
+            double measuredAcceleration = (previousSpeed * previousSpeed - speed * speed)
+                / (2.0 * stepDistance);
+            requireClose(measuredAcceleration, acceleration, "constant braking sample " + step);
+            previousSpeed = speed;
         }
+    }
 
-        double halfStepAdjustment = (expectedFinalAcceleration - expectedInitialAcceleration)
-            / (2.0 * SAMPLE_COUNT);
-        requireClose(previousAcceleration, expectedFinalAcceleration - halfStepAdjustment,
-            "last acceleration segment");
-        requireClose(previousBrakingMagnitude, expectedInitialAcceleration + halfStepAdjustment,
-            "last braking segment");
+    private static void testActivationCountsOnlyFullRailsAhead() {
+        int activeBlocks = 16;
+        RailPathScanner.PoweredPath below = path(15, true, false, 14.75, 15.75, 15L);
+        RailPathScanner.PoweredPath equal = path(16, false, false, 15.75, 16.75, 16L);
+        RailPathScanner.PoweredPath above = path(17, false, false, 16.75, 17.75, 17L);
+
+        require(!MinecartSpeedManager.hasActivationDistance(true, below, activeBlocks),
+            "activeBlocks-1 full rails must not activate");
+        require(MinecartSpeedManager.hasActivationDistance(true, equal, activeBlocks),
+            "exactly activeBlocks full rails must activate");
+        require(MinecartSpeedManager.hasActivationDistance(true, above, activeBlocks),
+            "more than activeBlocks full rails must activate");
+        require(!MinecartSpeedManager.hasActivationDistance(false, above, activeBlocks),
+            "the current rail must also be powered");
+    }
+
+    private static void testUnloadedBoundaryDoesNotLowerThresholdOrBrake() {
+        RailPathScanner.PoweredPath fiveThenUnloaded = path(5, false, true, 4.75, 5.75, 5L);
+        RailPathScanner.PoweredPath sixteenThenUnloaded = path(16, false, true, 15.75, 16.75, 16L);
+
+        require(!MinecartSpeedManager.hasActivationDistance(true, fiveThenUnloaded, 64),
+            "five confirmed rails cannot replace an activeBlocks=64 threshold");
+        require(MinecartSpeedManager.hasActivationDistance(true, sixteenThenUnloaded, 16),
+            "confirmed rails may activate even when the following chunk is unknown");
+        require(!MinecartSpeedManager.shouldBrakeForConfirmedEnd(true, fiveThenUnloaded, 16),
+            "an unloaded boundary is not a real powered-rail end");
+        require(Double.isInfinite(MinecartSpeedManager.brakeBoundaryDistance(fiveThenUnloaded, 16)),
+            "an unloaded boundary has no braking boundary");
+    }
+
+    private static void testBrakeBoundaryAndFinalRailTarget() {
+        RailPathScanner.PoweredPath shortKnownEnd = path(15, true, false, 14.75, 15.75, 15L);
+        RailPathScanner.PoweredPath exactKnownEnd = path(16, true, false, 15.75, 16.75, 16L);
+        RailPathScanner.PoweredPath currentRailIsLast = path(0, true, false, -0.25, 0.75, 99L);
+
+        require(MinecartSpeedManager.shouldBrakeForConfirmedEnd(true, shortKnownEnd, 16),
+            "a confirmed end below activeBlocks must brake");
+        require(!MinecartSpeedManager.shouldBrakeForConfirmedEnd(true, exactKnownEnd, 16),
+            "an exact activeBlocks distance starts braking only after the next boundary");
+        requireClose(
+            MinecartSpeedManager.brakeBoundaryDistance(exactKnownEnd, 16),
+            0.75,
+            "exact threshold boundary is the next rail entry"
+        );
+        requireClose(shortKnownEnd.brakingTargetDistance(), 14.75,
+            "normal target is the last powered rail entry");
+        requireClose(currentRailIsLast.brakingTargetDistance(), 0.75,
+            "missed entry falls back to the remaining final rail distance");
+        requireClose(
+            MinecartSpeedManager.confirmedDistanceAfterTravel(16.0, 1.25),
+            14.75,
+            "confirmed distance advances with the cart"
+        );
+    }
+
+    private static RailPathScanner.PoweredPath path(
+        int fullRailsAhead,
+        boolean reachedEnd,
+        boolean stoppedAtUnloaded,
+        double lastRailEntryDistance,
+        double totalDistance,
+        long lastRailPos
+    ) {
+        return new RailPathScanner.PoweredPath(
+            totalDistance,
+            fullRailsAhead,
+            lastRailEntryDistance,
+            lastRailPos,
+            reachedEnd,
+            stoppedAtUnloaded
+        );
     }
 
     private static void requireClose(double actual, double expected, String label) {

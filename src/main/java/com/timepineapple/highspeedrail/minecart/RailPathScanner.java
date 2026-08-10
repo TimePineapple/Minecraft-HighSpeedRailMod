@@ -40,8 +40,13 @@ public final class RailPathScanner {
         }
 
         double distance = Math.max(0.0, 1.0 - startingFrame.progress());
+        int fullPoweredRailsAhead = 0;
+        double lastRailEntryDistance = -startingFrame.progress();
+        long lastPoweredRailPos = startingRailPos.asLong();
         if (distance >= stopAfterDistance) {
-            return new PoweredPath(distance, false, false);
+            return new PoweredPath(
+                distance, fullPoweredRailsAhead, lastRailEntryDistance, lastPoweredRailPos, false, false
+            );
         }
 
         BlockPos.Mutable currentScratch = new BlockPos.Mutable();
@@ -60,21 +65,32 @@ public final class RailPathScanner {
 
         for (int scanned = 0; scanned < maximumSteps; scanned++) {
             if (current == UNLOADED) {
-                return new PoweredPath(distance, false, true);
+                return new PoweredPath(
+                    distance, fullPoweredRailsAhead, lastRailEntryDistance, lastPoweredRailPos, false, true
+                );
             }
             if (current == NO_RAIL) {
-                return new PoweredPath(distance, true, false);
+                return new PoweredPath(
+                    distance, fullPoweredRailsAhead, lastRailEntryDistance, lastPoweredRailPos, true, false
+                );
             }
 
             currentScratch.set(current);
             BlockState state = world.getBlockState(currentScratch);
             if (!isPoweredRail(state)) {
-                return new PoweredPath(distance, true, false);
+                return new PoweredPath(
+                    distance, fullPoweredRailsAhead, lastRailEntryDistance, lastPoweredRailPos, true, false
+                );
             }
 
+            lastRailEntryDistance = distance;
+            lastPoweredRailPos = current;
+            fullPoweredRailsAhead++;
             distance += 1.0;
             if (distance >= stopAfterDistance) {
-                return new PoweredPath(distance, false, false);
+                return new PoweredPath(
+                    distance, fullPoweredRailsAhead, lastRailEntryDistance, lastPoweredRailPos, false, false
+                );
             }
 
             long next = nextRail(world, previous, current, state, currentScratch, firstScratch, secondScratch);
@@ -82,7 +98,9 @@ public final class RailPathScanner {
             current = next;
         }
 
-        return new PoweredPath(distance, false, false);
+        return new PoweredPath(
+            distance, fullPoweredRailsAhead, lastRailEntryDistance, lastPoweredRailPos, false, false
+        );
     }
 
     public static TravelMeasure measureRailTravel(
@@ -394,8 +412,23 @@ public final class RailPathScanner {
         private static final ScanResult EMPTY = new ScanResult(0, false);
     }
 
-    public record PoweredPath(double distance, boolean reachedEnd, boolean stoppedAtUnloadedChunk) {
-        private static final PoweredPath EMPTY = new PoweredPath(0.0, true, false);
+    public record PoweredPath(
+        double distance,
+        int fullPoweredRailsAhead,
+        double lastRailEntryDistance,
+        long lastPoweredRailPos,
+        boolean reachedEnd,
+        boolean stoppedAtUnloadedChunk
+    ) {
+        private static final PoweredPath EMPTY = new PoweredPath(
+            0.0, 0, 0.0, Long.MIN_VALUE, true, false
+        );
+
+        public double brakingTargetDistance() {
+            return fullPoweredRailsAhead > 0
+                ? Math.max(0.0, lastRailEntryDistance)
+                : Math.max(0.0, distance);
+        }
     }
 
     public record RailFrame(double progress, Vec3d tangent, Vec3i backwardEndpoint, Vec3i forwardEndpoint) {

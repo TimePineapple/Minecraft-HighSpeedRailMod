@@ -17,20 +17,23 @@ import java.util.Optional;
 
 public final class ModConfig {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final Path CONFIG_PATH = FabricLoader.getInstance().getConfigDir().resolve("highspeedrail.json");
-    private static final Path LEGACY_CONFIG_PATH = FabricLoader.getInstance().getConfigDir().resolve("highspeedminecart.json");
     private static final double FALLBACK_VANILLA_MAX_SPEED = 0.4;
+    private static final int DEFAULT_ACCELERATION_SECONDS = 5;
+    private static final int TICKS_PER_SECOND = 20;
 
     public boolean enable = true;
     public double maxSpeed = 1.2;
     public int activeBlocks = 16;
+    public int accelerationSeconds = DEFAULT_ACCELERATION_SECONDS;
 
     public static ModConfig defaults() {
         return new ModConfig();
     }
 
     public static LoadResult load(ModConfig lastValidConfig) {
-        Path sourcePath = Files.exists(CONFIG_PATH) ? CONFIG_PATH : LEGACY_CONFIG_PATH;
+        Path configPath = configPath();
+        Path legacyConfigPath = legacyConfigPath();
+        Path sourcePath = Files.exists(configPath) ? configPath : legacyConfigPath;
         if (Files.notExists(sourcePath)) {
             ModConfig defaults = defaults();
             if (!write(defaults)) {
@@ -41,19 +44,14 @@ public final class ModConfig {
 
         try (Reader reader = Files.newBufferedReader(sourcePath)) {
             JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
-            ModConfig parsed = GSON.fromJson(root, ModConfig.class);
-            if (parsed == null || root == null) {
-                throw new JsonParseException("configuration root is null");
-            }
-
-            migrateLegacyNames(root, parsed);
+            ModConfig parsed = parse(root);
             Optional<String> validationError = parsed.validationError();
             if (validationError.isPresent()) {
                 String message = validationError.get();
                 HighSpeedRail.LOGGER.warn("illegal value in {}: {}", sourcePath, message);
                 return new LoadResult(lastValidConfig, false, "illegal value: " + message);
             }
-            // Always rewrite with the canonical three-key schema. Gson ignores legacy keys while reading.
+            // Always rewrite with the canonical four-key schema. Gson ignores legacy keys while reading.
             if (!write(parsed)) {
                 return new LoadResult(lastValidConfig, false, "Could not write highspeedrail.json.");
             }
@@ -68,12 +66,8 @@ public final class ModConfig {
         return Math.max(maxSpeed, vanillaMaxSpeed);
     }
 
-    public double derivedBaseAcceleration(double vanillaMaxSpeed) {
-        if (maxSpeed <= vanillaMaxSpeed) {
-            return 0.0;
-        }
-        double acceleration = (maxSpeed - vanillaMaxSpeed) * (maxSpeed + vanillaMaxSpeed)
-            / (2.0 * activeBlocks);
+    public double configuredAcceleration() {
+        double acceleration = maxSpeed / (TICKS_PER_SECOND * (double) accelerationSeconds);
         return Double.isFinite(acceleration) ? acceleration : 0.0;
     }
 
@@ -86,6 +80,7 @@ public final class ModConfig {
         copy.enable = enable;
         copy.maxSpeed = maxSpeed;
         copy.activeBlocks = activeBlocks;
+        copy.accelerationSeconds = accelerationSeconds;
         return copy;
     }
 
@@ -93,10 +88,26 @@ public final class ModConfig {
         if (!Double.isFinite(maxSpeed) || maxSpeed <= FALLBACK_VANILLA_MAX_SPEED) {
             return Optional.of("maxSpeed must be finite and greater than 0.4");
         }
-        if (activeBlocks < 1) {
-            return Optional.of("activeBlocks must be at least 1");
+        if (activeBlocks < 2) {
+            return Optional.of("activeBlocks must be at least 2");
+        }
+        if (accelerationSeconds < 1) {
+            return Optional.of("accelerationSeconds must be an integer of at least 1");
         }
         return Optional.empty();
+    }
+
+    static ModConfig parse(JsonObject root) {
+        if (root == null) {
+            throw new JsonParseException("configuration root is null");
+        }
+        validateIntegerField(root, "accelerationSeconds");
+        ModConfig parsed = GSON.fromJson(root, ModConfig.class);
+        if (parsed == null) {
+            throw new JsonParseException("configuration root is null");
+        }
+        migrateLegacyNames(root, parsed);
+        return parsed;
     }
 
     private static void migrateLegacyNames(JsonObject root, ModConfig config) {
@@ -109,19 +120,44 @@ public final class ModConfig {
         if (!root.has("activeBlocks") && root.has("activationRailThreshold")) {
             config.activeBlocks = root.get("activationRailThreshold").getAsInt();
         }
+        if (!root.has("accelerationSeconds")) {
+            config.accelerationSeconds = DEFAULT_ACCELERATION_SECONDS;
+        }
+        if (config.activeBlocks == 1) {
+            config.activeBlocks = 2;
+        }
+    }
+
+    private static void validateIntegerField(JsonObject root, String name) {
+        if (!root.has(name)) {
+            return;
+        }
+        String encoded = root.get(name).toString();
+        if (!encoded.matches("-?(0|[1-9][0-9]*)")) {
+            throw new JsonParseException(name + " must be a JSON integer");
+        }
     }
 
     private static boolean write(ModConfig config) {
+        Path configPath = configPath();
         try {
-            Files.createDirectories(CONFIG_PATH.getParent());
-            try (Writer writer = Files.newBufferedWriter(CONFIG_PATH)) {
+            Files.createDirectories(configPath.getParent());
+            try (Writer writer = Files.newBufferedWriter(configPath)) {
                 GSON.toJson(config, writer);
             }
             return true;
         } catch (IOException exception) {
-            HighSpeedRail.LOGGER.warn("Could not write {}: {}", CONFIG_PATH, exception.getMessage());
+            HighSpeedRail.LOGGER.warn("Could not write {}: {}", configPath, exception.getMessage());
             return false;
         }
+    }
+
+    private static Path configPath() {
+        return FabricLoader.getInstance().getConfigDir().resolve("highspeedrail.json");
+    }
+
+    private static Path legacyConfigPath() {
+        return FabricLoader.getInstance().getConfigDir().resolve("highspeedminecart.json");
     }
 
     public record LoadResult(ModConfig config, boolean success, String errorMessage) {

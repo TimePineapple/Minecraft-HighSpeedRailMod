@@ -10,16 +10,22 @@ public final class MinecartSpeedState {
     private Vec3d positionBeforeVanillaTick = Vec3d.ZERO;
     private long railPosBeforeVanillaTick = Long.MIN_VALUE;
     private Vec3d tangentBeforeVanillaTick = Vec3d.ZERO;
-    private int poweredRailsAhead;
     private double poweredDistanceBeforeVanillaTick;
+    private int fullPoweredRailsAheadBeforeVanillaTick;
+    private boolean poweredPathReachedEndBeforeVanillaTick;
+    private boolean poweredPathStoppedAtUnloadedBeforeVanillaTick;
+    private double brakeBoundaryDistanceBeforeVanillaTick = Double.POSITIVE_INFINITY;
+    private double brakeTargetDistanceBeforeVanillaTick;
+    private long scannedLastPoweredRailPos = Long.MIN_VALUE;
     private double phaseStartSpeed;
     private double phaseTargetSpeed;
     private double phaseDistance;
     private double phaseProgress;
+    private double phaseAcceleration;
+    private boolean distanceBasedPhase;
     private boolean railEndBrake;
+    private long brakeTerminalRailPos = Long.MIN_VALUE;
     private double configuredMaxSpeed = Double.NaN;
-    private int configuredActiveBlocks = -1;
-    private double configuredVanillaSpeed = Double.NaN;
 
     public MinecartSpeedMode mode() {
         return mode;
@@ -77,12 +83,41 @@ public final class MinecartSpeedState {
         this.tangentBeforeVanillaTick = tangentBeforeVanillaTick;
     }
 
-    public int poweredRailsAhead() {
-        return poweredRailsAhead;
+    public int fullPoweredRailsAheadBeforeVanillaTick() {
+        return fullPoweredRailsAheadBeforeVanillaTick;
     }
 
-    public void setPoweredRailsAhead(int poweredRailsAhead) {
-        this.poweredRailsAhead = poweredRailsAhead;
+    public boolean poweredPathReachedEndBeforeVanillaTick() {
+        return poweredPathReachedEndBeforeVanillaTick;
+    }
+
+    public boolean poweredPathStoppedAtUnloadedBeforeVanillaTick() {
+        return poweredPathStoppedAtUnloadedBeforeVanillaTick;
+    }
+
+    public double brakeBoundaryDistanceBeforeVanillaTick() {
+        return brakeBoundaryDistanceBeforeVanillaTick;
+    }
+
+    public double brakeTargetDistanceBeforeVanillaTick() {
+        return brakeTargetDistanceBeforeVanillaTick;
+    }
+
+    public long scannedLastPoweredRailPos() {
+        return scannedLastPoweredRailPos;
+    }
+
+    public void setPoweredPathBeforeVanillaTick(
+        RailPathScanner.PoweredPath path,
+        double brakeBoundaryDistance
+    ) {
+        poweredDistanceBeforeVanillaTick = Math.max(0.0, path.distance());
+        fullPoweredRailsAheadBeforeVanillaTick = Math.max(0, path.fullPoweredRailsAhead());
+        poweredPathReachedEndBeforeVanillaTick = path.reachedEnd();
+        poweredPathStoppedAtUnloadedBeforeVanillaTick = path.stoppedAtUnloadedChunk();
+        brakeBoundaryDistanceBeforeVanillaTick = brakeBoundaryDistance;
+        brakeTargetDistanceBeforeVanillaTick = path.brakingTargetDistance();
+        scannedLastPoweredRailPos = path.lastPoweredRailPos();
     }
 
     public double poweredDistanceBeforeVanillaTick() {
@@ -109,12 +144,44 @@ public final class MinecartSpeedState {
         return phaseProgress;
     }
 
-    public void setPhase(double startSpeed, double targetSpeed, double distance, boolean railEndBrake) {
+    public double phaseAcceleration() {
+        return phaseAcceleration;
+    }
+
+    public boolean distanceBasedPhase() {
+        return distanceBasedPhase;
+    }
+
+    public long brakeTerminalRailPos() {
+        return brakeTerminalRailPos;
+    }
+
+    public void setTimedPhase(double startSpeed, double targetSpeed, double acceleration) {
+        phaseStartSpeed = startSpeed;
+        phaseTargetSpeed = targetSpeed;
+        phaseDistance = 0.0;
+        phaseProgress = 0.0;
+        phaseAcceleration = Math.max(0.0, acceleration);
+        distanceBasedPhase = false;
+        railEndBrake = false;
+        brakeTerminalRailPos = Long.MIN_VALUE;
+    }
+
+    public void setRailEndPhase(
+        double startSpeed,
+        double targetSpeed,
+        double distance,
+        double acceleration,
+        long terminalRailPos
+    ) {
         phaseStartSpeed = startSpeed;
         phaseTargetSpeed = targetSpeed;
         phaseDistance = Math.max(0.0, distance);
         phaseProgress = 0.0;
-        this.railEndBrake = railEndBrake;
+        phaseAcceleration = Math.max(0.0, acceleration);
+        distanceBasedPhase = true;
+        railEndBrake = true;
+        brakeTerminalRailPos = terminalRailPos;
     }
 
     public void setPhaseProgress(double phaseProgress) {
@@ -125,15 +192,11 @@ public final class MinecartSpeedState {
         return railEndBrake;
     }
 
-    public boolean parametersMatch(double maxSpeed, int activeBlocks, double vanillaSpeed) {
-        return Double.compare(configuredMaxSpeed, maxSpeed) == 0
-            && configuredActiveBlocks == activeBlocks
-            && Double.compare(configuredVanillaSpeed, vanillaSpeed) == 0;
+    public boolean maxSpeedMatches(double maxSpeed) {
+        return Double.compare(configuredMaxSpeed, maxSpeed) == 0;
     }
 
-    public void setParameters(double maxSpeed, int activeBlocks, double vanillaSpeed) {
+    public void setConfiguredMaxSpeed(double maxSpeed) {
         configuredMaxSpeed = maxSpeed;
-        configuredActiveBlocks = activeBlocks;
-        configuredVanillaSpeed = vanillaSpeed;
     }
 }

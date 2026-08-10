@@ -21,7 +21,7 @@ Loader 和 Fabric API 使用不同的版本编号。本项目要求 Fabric Loade
 
 1. 建立 Minecraft 1.21.11 Fabric Dedicated Server，并使用 Fabric Loader 0.19.3。
 2. 将兼容 1.21.11 的 Fabric API JAR 放入服务器 `mods/`。
-3. 将 `highspeedrail-1.1.2.jar` 放入服务器 `mods/`。
+3. 将 `highspeedrail-1.2.0.jar` 放入服务器 `mods/`。
 4. 启动服务器。客户端不安装 highSpeedRail，也不需要 Fabric API。
 
 模组不注册方块、物品、实体或自定义网络 payload。矿车的位置和速度仅通过原版实体 tracking 数据同步给客户端。
@@ -40,7 +40,8 @@ config/highspeedrail.json
 {
   "enable": true,
   "maxSpeed": 1.2,
-  "activeBlocks": 16
+  "activeBlocks": 16,
+  "accelerationSeconds": 5
 }
 ```
 
@@ -48,27 +49,29 @@ config/highspeedrail.json
 | --- | --- | --- |
 | `enable` | 是否启用高速逻辑 | 布尔值 |
 | `maxSpeed` | 高速模式最高速度 | blocks/tick |
-| `activeBlocks` | 从原版上限加到自定义上限、或反向减速时的基准距离 | 轨道格 |
+| `activeBlocks` | 激活高速逻辑、以及接近已确认终点时开始制动的完整前方动力轨门槛 | 轨道格 |
+| `accelerationSeconds` | 以固定加速度从速度 0 加到 `maxSpeed` 所需的游戏秒数 | 秒（20 tick） |
 
 20 TPS 时：`1 block/tick = 20 blocks/second`。默认 `1.2 blocks/tick` 相当于理论水平速度 `24 blocks/second`。
 
-`maxSpeed` 必须为有限数且严格大于 `0.4`，`activeBlocks` 必须至少为 `1`。非法指令会返回 `illegal value` 且不修改实时值或 JSON；非法 `reload` 会保留最后一组合法配置。运行时若实验 controller 的原版速度上限高于 `maxSpeed`，模组不会降低原版上限。
+`maxSpeed` 必须为有限数且严格大于 `0.4`，`activeBlocks` 必须至少为 `2`，`accelerationSeconds` 必须是至少为 `1` 的 JSON 整数。非法指令会返回 `illegal value` 且不修改实时值或 JSON；非法 `reload` 会保留最后一组合法配置。运行时若实验 controller 的原版速度上限高于 `maxSpeed`，模组不会降低原版上限。
 
-加速度、减速度和扫描距离均不是配置项。模组先计算要求的平均加速度 `Areq=(maxSpeed²-v2²)/(2×activeBlocks)`，再使用 `A=max(Areq, 0.06)`，保证模组控制阶段不低于原版动力铁轨的 `0.06 blocks/tick²`。加速段的加速度按轨道距离从 `0.06` 线性增加到 `2A-0.06`；减速段完全镜像，从 `2A-0.06` 逐渐降低到 `0.06`。当 `Areq<0.06` 时采用恒定 `0.06`，因此会早于 `activeBlocks` 到达目标速度并保持。
+加速使用固定值 `a=maxSpeed/(20×accelerationSeconds)`，不再保留原版动力轨 `0.06 blocks/tick²` 下限。每次进入加速阶段时从矿车的实际速度接续，并使用该固定 `a`，所以 `accelerationSeconds` 定义的是“从 0 到自定义上限”的总时间，而不是每次重新激活后都重新计满该时间。加速过程中单独修改 `accelerationSeconds` 只影响下一次进入加速阶段。
 
-例如陆地 `v2=0.4`、`maxSpeed=4`、`activeBlocks=64` 时，`Areq=A=0.12375`，加速度从 `0.06` 增至 `0.1875`，减速反向变化，两个阶段都精确使用 64 格。默认 `maxSpeed=1.2`、`activeBlocks=16` 的 `Areq=0.04` 低于原版下限，因此实际使用恒定 `0.06`，从 `0.4` 到 `1.2` 约需 `10.667` 格，从静止理论上需要 12 格。
+默认 `maxSpeed=1.2`、`accelerationSeconds=5` 时，`a=0.012 blocks/tick²`：从 0 精确使用 100 tick 到达 1.2，从原版陆地上限 0.4 接管时约需 66.667 tick。末端制动允许使用不同的常量 `aBrake=(vStart²-vVanilla²)/(2×distance)`；`distance` 是当前位置到最后一格已供电动力轨入口的轨道距离，因此矿车进入最后一格时恢复实时原版上限，并在该格保持。
 
-管理员可实时查看或修改配置。`set` 成功后立即影响已加载矿车，并写回 JSON，重启后仍保留：
+管理员可实时查看或修改配置。`set` 成功后会写回 JSON，重启后仍保留；`maxSpeed`、`activeBlocks` 在下一 tick 参与状态判定，`accelerationSeconds` 则从下一次进入加速阶段起使用：
 
 ```mcfunction
 /highspeedrail get
 /highspeedrail set enable true
 /highspeedrail set maxSpeed 1.5
 /highspeedrail set activeBlocks 24
+/highspeedrail set accelerationSeconds 5
 /highspeedrail reload
 ```
 
-`reload` 用于重新读取手动编辑的 JSON。所有命令要求原版权限等级 2（`GAMEMASTERS`）。
+`reload` 用于重新读取手动编辑的 JSON。旧三键配置会自动补入 `accelerationSeconds=5`；旧 `activeBlocks=1` 会迁移为 `2`。所有命令要求原版权限等级 2（`GAMEMASTERS`）。
 
 ## 工作原理
 
@@ -79,10 +82,10 @@ NORMAL -> ACCELERATING -> HIGH_SPEED -> DECELERATING -> BRAKE_HOLD -> NORMAL
 ```
 
 - `NORMAL`：完全使用原版速度上限。原版先为静止矿车产生非零方向，模组随后可从实际速度接管。
-- `ACCELERATING`：剩余连续动力铁轨距离超过 `activeBlocks` 时启动，按实际起速和轨道格进度使用加速度单调增加的速度曲线。
+- `ACCELERATING`：当前格之外至少确认 `activeBlocks` 个完整、连续、已供电动力轨时启动，按游戏 tick 使用本阶段固定的加速度。
 - `HIGH_SPEED`：允许并保持 `maxSpeed`。
-- `DECELERATING`：按当前速度实时计算所需制动距离；制动力按加速曲线反向变化，前段强、后段逐渐降至原版加速度。`Areq>=0.06` 时正常制动距离等于 `activeBlocks`，否则会更短。
-- `BRAKE_HOLD`：提前到达原版上限后保持该速度直到动力段末端；只有线路延长到足以再次完成加速和制动时才恢复加速。
+- `DECELERATING`：已确认真实终点且完整前方动力轨少于 `activeBlocks` 时启动；使用一次计算出的常量 `a`，在最后一格动力轨入口达到实时原版上限。实时降低 `maxSpeed` 时也使用固定配置加速度平滑回到新上限。
+- `BRAKE_HOLD`：在最后一格动力轨保持实时原版上限；只有线路延长到重新确认至少 `activeBlocks` 个完整动力轨时才恢复加速。
 
 每辆矿车的状态存储在 Mixin 注入的运行时字段中，不写入世界存档。字段与实体生命周期一致，实体卸载或移除后可正常回收，不使用全局强引用 Map。
 
@@ -96,7 +99,9 @@ NORMAL -> ACCELERATING -> HIGH_SPEED -> DECELERATING -> BRAKE_HOLD -> NORMAL
 
 扫描只把精确的 `Blocks.POWERED_RAIL` 且 `POWERED=true` 计入。1.21.11 的 Activator Rail 也使用 `PoweredRailBlock` 类，因此额外检查具体 block，确保 Activator/Detector/普通/未供电铁轨都不计数。
 
-扫描复用 `BlockPos.Mutable`，不建立路径 List；每格轨道映射为连续的 `0..1` 进度，弯轨和坡轨也各计一格。单 tick 跨越多格或跨过制动边界时会按真实路径进度拆分计算。目标 chunk 未加载时调用 `isChunkLoaded` 后停止扫描，不生成或强制加载区块。临时的区块边界波动会沿用上一 tick 已确认、并扣除实际行驶距离后的动力铁轨距离；扫描确认真实终点、断轨或未供电铁轨时立即采用更短的当前距离。
+扫描复用 `BlockPos.Mutable`，不建立路径 List；每格轨道映射为连续的 `0..1` 进度，弯轨和坡轨也各计一格。`activeBlocks` 只统计当前格之外的完整动力轨，等于门槛即可激活。单 tick 跨越多格或跨过制动触发边界时，会按真实路径进度拆分计算。
+
+目标 chunk 未加载时，扫描在 `isChunkLoaded` 检查处停止，不生成或强制加载区块，也不把未知边界当成动力轨终点。未能实际确认满 `activeBlocks` 格时不会激活，以避免红石机器尚未完整加载时误进入高速逻辑；已处于高速或制动状态的矿车则保留现有阶段，直到新区块加载后能根据真实轨道重新判断。
 
 ### 原版速度上限与 Mixin
 
@@ -133,7 +138,7 @@ Minecraft 1.21.11 的实验 controller 通过同一个 `AbstractMinecartEntity#g
 生成文件：
 
 ```text
-build/libs/highspeedrail-1.1.2.jar
+build/libs/highspeedrail-1.2.0.jar
 ```
 
 详细人工验收步骤见 [TESTING.md](TESTING.md)。

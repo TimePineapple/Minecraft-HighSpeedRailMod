@@ -2,37 +2,46 @@ package com.timepineapple.highspeedrail.minecart;
 
 public final class SpeedProfile {
     private static final double EPSILON = 1.0E-9;
-    public static final double VANILLA_POWERED_RAIL_ACCELERATION = 0.06;
+    private static final int TICKS_PER_SECOND = 20;
 
-    public static double baseAcceleration(double maxSpeed, double vanillaSpeed, int activeBlocks) {
-        if (!Double.isFinite(maxSpeed) || !Double.isFinite(vanillaSpeed) || activeBlocks < 1 || maxSpeed <= vanillaSpeed) {
+    public static double configuredAcceleration(double maxSpeed, int accelerationSeconds) {
+        if (!Double.isFinite(maxSpeed) || maxSpeed <= 0.0 || accelerationSeconds < 1) {
             return 0.0;
         }
-        return (maxSpeed - vanillaSpeed) * (maxSpeed + vanillaSpeed) / (2.0 * activeBlocks);
+        return maxSpeed / (TICKS_PER_SECOND * (double) accelerationSeconds);
     }
 
-    public static double distance(double startSpeed, double targetSpeed, double baseAcceleration) {
+    public static double moveTowards(
+        double startSpeed,
+        double targetSpeed,
+        double acceleration,
+        double elapsedTicks
+    ) {
         if (!Double.isFinite(startSpeed) || !Double.isFinite(targetSpeed)
-            || !Double.isFinite(baseAcceleration) || baseAcceleration <= EPSILON) {
-            return 0.0;
+            || !Double.isFinite(acceleration) || !Double.isFinite(elapsedTicks)
+            || acceleration <= EPSILON || elapsedTicks <= 0.0) {
+            return startSpeed;
         }
-        return Math.abs((targetSpeed - startSpeed) * (targetSpeed + startSpeed))
-            / (2.0 * effectiveAverageAcceleration(baseAcceleration));
+        double delta = acceleration * elapsedTicks;
+        return targetSpeed >= startSpeed
+            ? Math.min(targetSpeed, startSpeed + delta)
+            : Math.max(targetSpeed, startSpeed - delta);
     }
 
-    public static double effectiveAverageAcceleration(double requestedAverageAcceleration) {
-        if (!Double.isFinite(requestedAverageAcceleration) || requestedAverageAcceleration <= 0.0) {
+    public static double brakingAcceleration(double startSpeed, double targetSpeed, double distance) {
+        if (!Double.isFinite(startSpeed) || !Double.isFinite(targetSpeed) || !Double.isFinite(distance)
+            || startSpeed <= targetSpeed || distance <= EPSILON) {
             return 0.0;
         }
-        return Math.max(requestedAverageAcceleration, VANILLA_POWERED_RAIL_ACCELERATION);
+        return (startSpeed - targetSpeed) * (startSpeed + targetSpeed) / (2.0 * distance);
     }
 
-    public static double finalAcceleration(double requestedAverageAcceleration) {
-        double effectiveAverage = effectiveAverageAcceleration(requestedAverageAcceleration);
-        if (effectiveAverage <= 0.0) {
+    public static double distance(double startSpeed, double targetSpeed, double acceleration) {
+        if (!Double.isFinite(startSpeed) || !Double.isFinite(targetSpeed)
+            || !Double.isFinite(acceleration) || acceleration <= EPSILON) {
             return 0.0;
         }
-        return 2.0 * effectiveAverage - VANILLA_POWERED_RAIL_ACCELERATION;
+        return Math.abs((targetSpeed - startSpeed) * (targetSpeed + startSpeed)) / (2.0 * acceleration);
     }
 
     public static double speedAt(
@@ -51,27 +60,7 @@ public final class SpeedProfile {
         double progress = Math.clamp(distanceTravelled / totalDistance, 0.0, 1.0);
         double startSquared = startSpeed * startSpeed;
         double targetSquared = targetSpeed * targetSpeed;
-        double energyDifference = Math.abs(targetSquared - startSquared);
-        double averageAcceleration = energyDifference / (2.0 * totalDistance);
-        if (!Double.isFinite(averageAcceleration) || averageAcceleration <= EPSILON) {
-            return targetSpeed;
-        }
-
-        double initialRatio = Math.clamp(
-            VANILLA_POWERED_RAIL_ACCELERATION / averageAcceleration,
-            0.0,
-            1.0
-        );
-        double energyProgress;
-        if (targetSpeed >= startSpeed) {
-            energyProgress = initialRatio * progress
-                + (1.0 - initialRatio) * progress * progress;
-        } else {
-            energyProgress = (2.0 - initialRatio) * progress
-                - (1.0 - initialRatio) * progress * progress;
-        }
-
-        double speedSquared = startSquared + (targetSquared - startSquared) * energyProgress;
+        double speedSquared = startSquared + (targetSquared - startSquared) * progress;
         return Math.sqrt(Math.max(0.0, speedSquared));
     }
 

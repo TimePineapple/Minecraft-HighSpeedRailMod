@@ -40,11 +40,17 @@ tasks.register('speedProfileTest', JavaExec) {
     mainClass = 'com.timepineapple.highspeedrail.minecart.SpeedProfileSelfTest'
 }
 
+tasks.register('configTest', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.timepineapple.highspeedrail.config.ModConfigSelfTest'
+}
+
 tasks.named('test') {
     failOnNoDiscoveredTests = false
 }
 
-check.dependsOn speedProfileTest
+check.dependsOn speedProfileTest, configTest
 
 java {
     withSourcesJar()

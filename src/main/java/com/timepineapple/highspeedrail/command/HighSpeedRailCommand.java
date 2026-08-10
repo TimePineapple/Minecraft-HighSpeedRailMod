@@ -37,10 +37,15 @@ public final class HighSpeedRailCommand {
                             .executes(context -> updateDouble(context, "maxSpeed", value -> value > 0.4,
                                 config -> config.maxSpeed = DoubleArgumentType.getDouble(context, "value")))))
                     .then(CommandManager.literal("activeBlocks")
-                        .then(CommandManager.argument("value", IntegerArgumentType.integer(1))
+                        .then(CommandManager.argument("value", IntegerArgumentType.integer(2))
                             .executes(context -> update(context, "activeBlocks",
                                 String.valueOf(IntegerArgumentType.getInteger(context, "value")),
                                 config -> config.activeBlocks = IntegerArgumentType.getInteger(context, "value")))))
+                    .then(CommandManager.literal("accelerationSeconds")
+                        .then(CommandManager.argument("value", IntegerArgumentType.integer(1))
+                            .executes(context -> update(context, "accelerationSeconds",
+                                String.valueOf(IntegerArgumentType.getInteger(context, "value")),
+                                config -> config.accelerationSeconds = IntegerArgumentType.getInteger(context, "value")))))
                 )
                 .then(CommandManager.literal("reload").executes(context -> {
                     ModConfig.LoadResult result = HighSpeedRail.reloadConfig();
@@ -56,23 +61,18 @@ public final class HighSpeedRailCommand {
     private static int showConfig(CommandContext<ServerCommandSource> context) {
         ModConfig config = HighSpeedRail.config();
         double vanillaLandSpeed = vanillaLandSpeed(context.getSource());
-        double requestedAverageAcceleration = SpeedProfile.baseAcceleration(
-            config.maxSpeed, vanillaLandSpeed, config.activeBlocks
-        );
-        double effectiveAverageAcceleration = SpeedProfile.effectiveAverageAcceleration(requestedAverageAcceleration);
-        double finalAcceleration = SpeedProfile.finalAcceleration(requestedAverageAcceleration);
+        double acceleration = SpeedProfile.configuredAcceleration(config.maxSpeed, config.accelerationSeconds);
         context.getSource().sendFeedback(() -> Text.literal(
             "highSpeedRail configuration:\n"
                 + "enable=" + config.enable + "\n"
                 + "maxSpeed=" + config.maxSpeed + "\n"
                 + "activeBlocks=" + config.activeBlocks + "\n"
+                + "accelerationSeconds=" + config.accelerationSeconds + "\n"
                 + "v2(land)=" + vanillaLandSpeed + "\n"
-                + "requestedAverageAcceleration=" + requestedAverageAcceleration + "\n"
-                + "effectiveAverageAcceleration=" + effectiveAverageAcceleration + "\n"
-                + "initialAcceleration=" + SpeedProfile.VANILLA_POWERED_RAIL_ACCELERATION + "\n"
-                + "finalAcceleration=" + finalAcceleration + "\n"
-                + "profile=linear-distance-mirrored\n"
-                + "Water minecarts recalculate v2 and average acceleration per cart."
+                + "configuredAcceleration=" + acceleration + "\n"
+                + "accelerationProfile=constant-from-zero-by-tick\n"
+                + "brakingProfile=dynamic-constant-to-final-powered-rail-entry\n"
+                + "Water and experimental minecarts recalculate the vanilla braking target per cart."
         ), false);
         return 1;
     }
