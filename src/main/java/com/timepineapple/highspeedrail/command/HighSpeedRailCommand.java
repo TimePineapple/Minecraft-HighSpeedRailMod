@@ -6,7 +6,8 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.timepineapple.highspeedrail.HighSpeedRail;
 import com.timepineapple.highspeedrail.config.ModConfig;
-import com.timepineapple.highspeedrail.minecart.SpeedProfile;
+import com.timepineapple.highspeedrail.minecart.PhysicsProfile;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.permission.Permission;
 import net.minecraft.command.permission.PermissionCheck;
@@ -14,8 +15,6 @@ import net.minecraft.command.permission.PermissionLevel;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
-import net.minecraft.entity.vehicle.AbstractMinecartEntity;
-import net.minecraft.world.rule.GameRules;
 
 import java.util.function.Consumer;
 
@@ -37,7 +36,7 @@ public final class HighSpeedRailCommand {
                             .executes(context -> updateDouble(context, "maxSpeed", value -> value > 0.4,
                                 config -> config.maxSpeed = DoubleArgumentType.getDouble(context, "value")))))
                     .then(CommandManager.literal("activeBlocks")
-                        .then(CommandManager.argument("value", IntegerArgumentType.integer(2))
+                        .then(CommandManager.argument("value", IntegerArgumentType.integer(ModConfig.MIN_ACTIVE_BLOCKS))
                             .executes(context -> update(context, "activeBlocks",
                                 String.valueOf(IntegerArgumentType.getInteger(context, "value")),
                                 config -> config.activeBlocks = IntegerArgumentType.getInteger(context, "value")))))
@@ -60,21 +59,41 @@ public final class HighSpeedRailCommand {
 
     private static int showConfig(CommandContext<ServerCommandSource> context) {
         ModConfig config = HighSpeedRail.config();
-        double vanillaLandSpeed = vanillaLandSpeed(context.getSource());
-        double acceleration = SpeedProfile.configuredAcceleration(config.maxSpeed, config.accelerationSeconds);
+        PhysicsProfile physics = HighSpeedRail.physicsProfile();
         context.getSource().sendFeedback(() -> Text.literal(
             "highSpeedRail configuration:\n"
+                + "version=" + modVersion() + "\n"
                 + "enable=" + config.enable + "\n"
                 + "maxSpeed=" + config.maxSpeed + "\n"
                 + "activeBlocks=" + config.activeBlocks + "\n"
                 + "accelerationSeconds=" + config.accelerationSeconds + "\n"
-                + "v2(land)=" + vanillaLandSpeed + "\n"
-                + "configuredAcceleration=" + acceleration + "\n"
-                + "accelerationProfile=constant-from-zero-by-tick\n"
-                + "brakingProfile=dynamic-constant-to-final-powered-rail-entry\n"
-                + "Water and experimental minecarts recalculate the vanilla braking target per cart."
+                + "effectiveActivationBlocks=" + physics.effectiveActivationBlocks() + "\n"
+                + "startupController=" + physics.startupController() + "\n"
+                + "startupCacheCaptured=" + physics.startupCaptured() + "\n"
+                + "cachedVanillaLandSpeed=" + physics.vanillaLandSpeed() + "\n"
+                + "cachedVanillaWaterSpeed=" + physics.vanillaWaterSpeed() + "\n"
+                + "cachedVanillaLandSlopeTrackSpeed="
+                + physics.vanillaTrackSpeed(false, true) + "\n"
+                + "cachedVanillaWaterSlopeTrackSpeed="
+                + physics.vanillaTrackSpeed(true, true) + "\n"
+                + "aAccel=" + physics.acceleration() + "\n"
+                + "aBrakeLandFlat=" + physics.brakeLandFlat() + "\n"
+                + "aBrakeWaterFlat=" + physics.brakeWaterFlat() + "\n"
+                + "aBrakeLandSlope=" + physics.brakeLandSlope() + "\n"
+                + "aBrakeWaterSlope=" + physics.brakeWaterSlope() + "\n"
+                + "speedUnit=track-centerline-blocks-per-tick\n"
+                + "slopePhysics=no-uphill-or-downhill-gravity-adjustment\n"
+                + "activePhysics=experimental-retention-compensated-with-horizontal-rail-snap\n"
+                + "Startup controller limits are cached; restart the server to refresh them."
         ), false);
         return 1;
+    }
+
+    private static String modVersion() {
+        return FabricLoader.getInstance()
+            .getModContainer(HighSpeedRail.MOD_ID)
+            .map(container -> container.getMetadata().getVersion().getFriendlyString())
+            .orElse("unknown");
     }
 
     private static int updateDouble(
@@ -115,13 +134,6 @@ public final class HighSpeedRailCommand {
     private static int error(CommandContext<ServerCommandSource> context, String message) {
         context.getSource().sendError(Text.literal(message));
         return 0;
-    }
-
-    private static double vanillaLandSpeed(ServerCommandSource source) {
-        if (!AbstractMinecartEntity.areMinecartImprovementsEnabled(source.getWorld())) {
-            return 0.4;
-        }
-        return source.getWorld().getGameRules().getValue(GameRules.MAX_MINECART_SPEED) / 20.0;
     }
 
     private HighSpeedRailCommand() {

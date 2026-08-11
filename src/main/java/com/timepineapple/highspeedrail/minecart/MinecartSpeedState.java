@@ -4,28 +4,34 @@ import net.minecraft.util.math.Vec3d;
 
 public final class MinecartSpeedState {
     private MinecartSpeedMode mode = MinecartSpeedMode.NORMAL;
-    private double vanillaMaxSpeed = 0.4;
-    private double speedBeforeVanillaTick;
-    private Vec3d velocityBeforeVanillaTick = Vec3d.ZERO;
-    private Vec3d positionBeforeVanillaTick = Vec3d.ZERO;
-    private long railPosBeforeVanillaTick = Long.MIN_VALUE;
-    private Vec3d tangentBeforeVanillaTick = Vec3d.ZERO;
-    private double poweredDistanceBeforeVanillaTick;
-    private int fullPoweredRailsAheadBeforeVanillaTick;
-    private boolean poweredPathReachedEndBeforeVanillaTick;
-    private boolean poweredPathStoppedAtUnloadedBeforeVanillaTick;
-    private double brakeBoundaryDistanceBeforeVanillaTick = Double.POSITIVE_INFINITY;
-    private double brakeTargetDistanceBeforeVanillaTick;
-    private long scannedLastPoweredRailPos = Long.MIN_VALUE;
-    private double phaseStartSpeed;
+    private double speed;
+    private Vec3d direction = Vec3d.ZERO;
     private double phaseTargetSpeed;
-    private double phaseDistance;
-    private double phaseProgress;
-    private double phaseAcceleration;
-    private boolean distanceBasedPhase;
-    private boolean railEndBrake;
-    private long brakeTerminalRailPos = Long.MIN_VALUE;
+    private double acceleration;
+    private double brakeLandFlat;
+    private double brakeWaterFlat;
+    private double brakeLandSlope;
+    private double brakeWaterSlope;
+    private boolean phaseBrakeSlope;
+    private int activeBlocks;
     private double configuredMaxSpeed = Double.NaN;
+    private boolean railEndBrake;
+    private boolean waitingAtUnloadedBoundary;
+    private int normalCooldownTicks;
+    private double tickStartSpeed;
+    private MinecartSpeedMode tickStartMode = MinecartSpeedMode.NORMAL;
+    private double tickStartTargetSpeed;
+    private double tickStartAcceleration;
+    private double tickStartBrakeLandFlat;
+    private double tickStartBrakeWaterFlat;
+    private double tickStartBrakeLandSlope;
+    private double tickStartBrakeWaterSlope;
+    private boolean tickStartPhaseBrakeSlope;
+    private int tickStartActiveBlocks;
+    private double tickStartConfiguredMaxSpeed;
+    private boolean tickStartRailEndBrake;
+    private long handoffRailPos = Long.MIN_VALUE;
+    private RailGeometryMover.MovementResult movementResult = RailGeometryMover.MovementResult.NONE;
 
     public MinecartSpeedMode mode() {
         return mode;
@@ -35,157 +41,73 @@ public final class MinecartSpeedState {
         this.mode = mode;
     }
 
-    public double vanillaMaxSpeed() {
-        return vanillaMaxSpeed;
+    public double speed() {
+        return speed;
     }
 
-    public void setVanillaMaxSpeed(double vanillaMaxSpeed) {
-        this.vanillaMaxSpeed = vanillaMaxSpeed;
+    public void setSpeed(double speed) {
+        this.speed = Math.max(0.0, speed);
     }
 
-    public double speedBeforeVanillaTick() {
-        return speedBeforeVanillaTick;
+    public Vec3d direction() {
+        return direction;
     }
 
-    public void setSpeedBeforeVanillaTick(double speedBeforeVanillaTick) {
-        this.speedBeforeVanillaTick = speedBeforeVanillaTick;
-    }
-
-    public Vec3d velocityBeforeVanillaTick() {
-        return velocityBeforeVanillaTick;
-    }
-
-    public void setVelocityBeforeVanillaTick(Vec3d velocityBeforeVanillaTick) {
-        this.velocityBeforeVanillaTick = velocityBeforeVanillaTick;
-    }
-
-    public Vec3d positionBeforeVanillaTick() {
-        return positionBeforeVanillaTick;
-    }
-
-    public void setPositionBeforeVanillaTick(Vec3d positionBeforeVanillaTick) {
-        this.positionBeforeVanillaTick = positionBeforeVanillaTick;
-    }
-
-    public long railPosBeforeVanillaTick() {
-        return railPosBeforeVanillaTick;
-    }
-
-    public void setRailPosBeforeVanillaTick(long railPosBeforeVanillaTick) {
-        this.railPosBeforeVanillaTick = railPosBeforeVanillaTick;
-    }
-
-    public Vec3d tangentBeforeVanillaTick() {
-        return tangentBeforeVanillaTick;
-    }
-
-    public void setTangentBeforeVanillaTick(Vec3d tangentBeforeVanillaTick) {
-        this.tangentBeforeVanillaTick = tangentBeforeVanillaTick;
-    }
-
-    public int fullPoweredRailsAheadBeforeVanillaTick() {
-        return fullPoweredRailsAheadBeforeVanillaTick;
-    }
-
-    public boolean poweredPathReachedEndBeforeVanillaTick() {
-        return poweredPathReachedEndBeforeVanillaTick;
-    }
-
-    public boolean poweredPathStoppedAtUnloadedBeforeVanillaTick() {
-        return poweredPathStoppedAtUnloadedBeforeVanillaTick;
-    }
-
-    public double brakeBoundaryDistanceBeforeVanillaTick() {
-        return brakeBoundaryDistanceBeforeVanillaTick;
-    }
-
-    public double brakeTargetDistanceBeforeVanillaTick() {
-        return brakeTargetDistanceBeforeVanillaTick;
-    }
-
-    public long scannedLastPoweredRailPos() {
-        return scannedLastPoweredRailPos;
-    }
-
-    public void setPoweredPathBeforeVanillaTick(
-        RailPathScanner.PoweredPath path,
-        double brakeBoundaryDistance
-    ) {
-        poweredDistanceBeforeVanillaTick = Math.max(0.0, path.distance());
-        fullPoweredRailsAheadBeforeVanillaTick = Math.max(0, path.fullPoweredRailsAhead());
-        poweredPathReachedEndBeforeVanillaTick = path.reachedEnd();
-        poweredPathStoppedAtUnloadedBeforeVanillaTick = path.stoppedAtUnloadedChunk();
-        brakeBoundaryDistanceBeforeVanillaTick = brakeBoundaryDistance;
-        brakeTargetDistanceBeforeVanillaTick = path.brakingTargetDistance();
-        scannedLastPoweredRailPos = path.lastPoweredRailPos();
-    }
-
-    public double poweredDistanceBeforeVanillaTick() {
-        return poweredDistanceBeforeVanillaTick;
-    }
-
-    public void setPoweredDistanceBeforeVanillaTick(double poweredDistanceBeforeVanillaTick) {
-        this.poweredDistanceBeforeVanillaTick = poweredDistanceBeforeVanillaTick;
-    }
-
-    public double phaseStartSpeed() {
-        return phaseStartSpeed;
+    public void setDirection(Vec3d direction) {
+        Vec3d horizontal = direction.getHorizontal();
+        if (horizontal.lengthSquared() > 1.0E-8) {
+            this.direction = horizontal.normalize();
+        }
     }
 
     public double phaseTargetSpeed() {
         return phaseTargetSpeed;
     }
 
-    public double phaseDistance() {
-        return phaseDistance;
+    public double acceleration() {
+        return acceleration;
     }
 
-    public double phaseProgress() {
-        return phaseProgress;
+    public double brakeAcceleration(boolean touchingWater) {
+        if (phaseBrakeSlope) {
+            return touchingWater ? brakeWaterSlope : brakeLandSlope;
+        }
+        return touchingWater ? brakeWaterFlat : brakeLandFlat;
     }
 
-    public double phaseAcceleration() {
-        return phaseAcceleration;
+    public int activeBlocks() {
+        return activeBlocks;
     }
 
-    public boolean distanceBasedPhase() {
-        return distanceBasedPhase;
+    public int effectiveActivationBlocks() {
+        return PhysicsProfile.effectiveActivationBlocks(activeBlocks);
     }
 
-    public long brakeTerminalRailPos() {
-        return brakeTerminalRailPos;
-    }
-
-    public void setTimedPhase(double startSpeed, double targetSpeed, double acceleration) {
-        phaseStartSpeed = startSpeed;
-        phaseTargetSpeed = targetSpeed;
-        phaseDistance = 0.0;
-        phaseProgress = 0.0;
-        phaseAcceleration = Math.max(0.0, acceleration);
-        distanceBasedPhase = false;
-        railEndBrake = false;
-        brakeTerminalRailPos = Long.MIN_VALUE;
-    }
-
-    public void setRailEndPhase(
-        double startSpeed,
+    public void startPhase(
+        MinecartSpeedMode mode,
         double targetSpeed,
-        double distance,
-        double acceleration,
-        long terminalRailPos
+        PhysicsProfile profile,
+        boolean railEndBrake,
+        boolean brakeSlope
     ) {
-        phaseStartSpeed = startSpeed;
-        phaseTargetSpeed = targetSpeed;
-        phaseDistance = Math.max(0.0, distance);
-        phaseProgress = 0.0;
-        phaseAcceleration = Math.max(0.0, acceleration);
-        distanceBasedPhase = true;
-        railEndBrake = true;
-        brakeTerminalRailPos = terminalRailPos;
+        this.mode = mode;
+        this.phaseTargetSpeed = Math.max(0.0, targetSpeed);
+        this.acceleration = Math.max(0.0, profile.acceleration());
+        this.brakeLandFlat = Math.max(0.0, profile.brakeLandFlat());
+        this.brakeWaterFlat = Math.max(0.0, profile.brakeWaterFlat());
+        this.brakeLandSlope = Math.max(0.0, profile.brakeLandSlope());
+        this.brakeWaterSlope = Math.max(0.0, profile.brakeWaterSlope());
+        this.phaseBrakeSlope = brakeSlope;
+        this.activeBlocks = profile.activeBlocks();
+        this.configuredMaxSpeed = profile.configuredMaxSpeed();
+        this.railEndBrake = railEndBrake;
     }
 
-    public void setPhaseProgress(double phaseProgress) {
-        this.phaseProgress = Math.max(0.0, phaseProgress);
+    public void startRailEndBrake(double targetSpeed, boolean brakeSlope) {
+        mode = MinecartSpeedMode.DECELERATING;
+        phaseTargetSpeed = Math.max(0.0, targetSpeed);
+        railEndBrake = true;
+        phaseBrakeSlope = brakeSlope;
     }
 
     public boolean railEndBrake() {
@@ -196,7 +118,82 @@ public final class MinecartSpeedState {
         return Double.compare(configuredMaxSpeed, maxSpeed) == 0;
     }
 
-    public void setConfiguredMaxSpeed(double maxSpeed) {
-        configuredMaxSpeed = maxSpeed;
+    public void beginTick() {
+        movementResult = RailGeometryMover.MovementResult.NONE;
+        tickStartSpeed = speed;
+        tickStartMode = mode;
+        tickStartTargetSpeed = phaseTargetSpeed;
+        tickStartAcceleration = acceleration;
+        tickStartBrakeLandFlat = brakeLandFlat;
+        tickStartBrakeWaterFlat = brakeWaterFlat;
+        tickStartBrakeLandSlope = brakeLandSlope;
+        tickStartBrakeWaterSlope = brakeWaterSlope;
+        tickStartPhaseBrakeSlope = phaseBrakeSlope;
+        tickStartActiveBlocks = activeBlocks;
+        tickStartConfiguredMaxSpeed = configuredMaxSpeed;
+        tickStartRailEndBrake = railEndBrake;
+        handoffRailPos = Long.MIN_VALUE;
+    }
+
+    public void restoreFrozenTick() {
+        speed = tickStartSpeed;
+        mode = tickStartMode;
+        phaseTargetSpeed = tickStartTargetSpeed;
+        acceleration = tickStartAcceleration;
+        brakeLandFlat = tickStartBrakeLandFlat;
+        brakeWaterFlat = tickStartBrakeWaterFlat;
+        brakeLandSlope = tickStartBrakeLandSlope;
+        brakeWaterSlope = tickStartBrakeWaterSlope;
+        phaseBrakeSlope = tickStartPhaseBrakeSlope;
+        activeBlocks = tickStartActiveBlocks;
+        configuredMaxSpeed = tickStartConfiguredMaxSpeed;
+        railEndBrake = tickStartRailEndBrake;
+        waitingAtUnloadedBoundary = true;
+    }
+
+    public boolean waitingAtUnloadedBoundary() {
+        return waitingAtUnloadedBoundary;
+    }
+
+    public void clearUnloadedBoundaryWait() {
+        waitingAtUnloadedBoundary = false;
+    }
+
+    public int normalCooldownTicks() {
+        return normalCooldownTicks;
+    }
+
+    public void consumeNormalCooldownTick() {
+        if (normalCooldownTicks > 0) {
+            normalCooldownTicks--;
+        }
+    }
+
+    public long handoffRailPos() {
+        return handoffRailPos;
+    }
+
+    public void setHandoffRailPos(long handoffRailPos) {
+        this.handoffRailPos = handoffRailPos;
+    }
+
+    public RailGeometryMover.MovementResult movementResult() {
+        return movementResult;
+    }
+
+    public void setMovementResult(RailGeometryMover.MovementResult movementResult) {
+        this.movementResult = movementResult;
+    }
+
+    public void resetToNormal(double speed, Vec3d direction, int cooldownTicks) {
+        mode = MinecartSpeedMode.NORMAL;
+        setSpeed(speed);
+        setDirection(direction);
+        phaseTargetSpeed = 0.0;
+        railEndBrake = false;
+        phaseBrakeSlope = false;
+        waitingAtUnloadedBoundary = false;
+        handoffRailPos = Long.MIN_VALUE;
+        normalCooldownTicks = Math.max(0, cooldownTicks);
     }
 }

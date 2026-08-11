@@ -20,6 +20,7 @@ public final class ModConfig {
     private static final double FALLBACK_VANILLA_MAX_SPEED = 0.4;
     private static final int DEFAULT_ACCELERATION_SECONDS = 5;
     private static final int TICKS_PER_SECOND = 20;
+    public static final int MIN_ACTIVE_BLOCKS = 8;
 
     public boolean enable = true;
     public double maxSpeed = 1.2;
@@ -88,8 +89,8 @@ public final class ModConfig {
         if (!Double.isFinite(maxSpeed) || maxSpeed <= FALLBACK_VANILLA_MAX_SPEED) {
             return Optional.of("maxSpeed must be finite and greater than 0.4");
         }
-        if (activeBlocks < 2) {
-            return Optional.of("activeBlocks must be at least 2");
+        if (activeBlocks < MIN_ACTIVE_BLOCKS) {
+            return Optional.of("activeBlocks must be at least " + MIN_ACTIVE_BLOCKS);
         }
         if (accelerationSeconds < 1) {
             return Optional.of("accelerationSeconds must be an integer of at least 1");
@@ -123,8 +124,8 @@ public final class ModConfig {
         if (!root.has("accelerationSeconds")) {
             config.accelerationSeconds = DEFAULT_ACCELERATION_SECONDS;
         }
-        if (config.activeBlocks == 1) {
-            config.activeBlocks = 2;
+        if (config.activeBlocks > 0 && config.activeBlocks < MIN_ACTIVE_BLOCKS) {
+            config.activeBlocks = MIN_ACTIVE_BLOCKS;
         }
     }
 

@@ -3,7 +3,9 @@
   "package": "com.timepineapple.highspeedrail.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "AbstractMinecartEntityMixin"
+    "AbstractMinecartEntityMixin",
+    "DefaultMinecartControllerMixin",
+    "ExperimentalMinecartControllerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

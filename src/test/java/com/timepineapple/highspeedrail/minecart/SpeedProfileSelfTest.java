@@ -1,156 +1,284 @@
 package com.timepineapple.highspeedrail.minecart;
 
+import com.timepineapple.highspeedrail.config.ModConfig;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.util.math.Vec3i;
+
 public final class SpeedProfileSelfTest {
     private static final double EPSILON = 1.0E-9;
-    private static final int SAMPLE_COUNT = 256;
+    private static final double SQRT_TWO = Math.sqrt(2.0);
 
     public static void main(String[] args) {
-        testConfiguredAccelerationFromZero();
-        testArbitraryStartUsesTheSameAcceleration();
-        testLiveSecondsWaitForTheNextPhase();
-        testConstantRailEndBraking();
-        testActivationCountsOnlyFullRailsAhead();
-        testUnloadedBoundaryDoesNotLowerThresholdOrBrake();
-        testBrakeBoundaryAndFinalRailTarget();
+        testDerivedPhysics();
+        testActivationAndHandoffBoundaries();
+        testTrackSpeedConversions();
+        testFixedTrackAcceleration();
+        testFlatAndSlopeBrakeCaches();
+        testPhaseSnapshotsAndLiveMaxReduction();
+        testUnloadedFreezeAndCollisionCooldown();
+        testExperimentalRetentionCompensation();
+        testNoSlopeGravityAdjustment();
+        testGeometryBudgetsAndSubsteps();
+        testRailGeometry();
+        testFullMovementTakeover();
     }
 
-    private static void testConfiguredAccelerationFromZero() {
-        double acceleration = SpeedProfile.configuredAcceleration(1.2, 5);
-        requireClose(acceleration, 0.012, "default configured acceleration");
-        requireClose(
-            SpeedProfile.moveTowards(0.0, 1.2, acceleration, 99.0),
-            1.188,
-            "speed after 99 ticks"
-        );
-        requireClose(
-            SpeedProfile.moveTowards(0.0, 1.2, acceleration, 100.0),
-            1.2,
-            "zero to maxSpeed in 100 ticks"
-        );
-        requireClose(
-            SpeedProfile.moveTowards(0.0, 1.2, acceleration, 200.0),
-            1.2,
-            "configured max clamps later ticks"
-        );
+    private static void testDerivedPhysics() {
+        PhysicsProfile profile = PhysicsProfile.defaults(config(4.0, 9, 30));
+        require(profile.effectiveActivationBlocks() == 17,
+            "activeBlocks=9 must activate at 17 full rails ahead");
+        requireClose(profile.vanillaLandSpeed(), 0.4, "default cached land maximum");
+        requireClose(profile.vanillaWaterSpeed(), 0.2, "default cached water maximum");
+        requireClose(profile.vanillaTrackSpeed(false, true), 0.4 * SQRT_TWO,
+            "slope handoff preserves the cached vanilla horizontal component");
+        requireClose(profile.vanillaTrackSpeed(true, true), 0.2 * SQRT_TWO,
+            "water slope handoff preserves the cached vanilla horizontal component");
+        requireClose(profile.acceleration(), 4.0 / 600.0, "configured track acceleration");
+        requireClose(profile.brakeLandFlat(), (16.0 - 0.16) / 18.0,
+            "land flat brake cache");
+        requireClose(profile.brakeWaterFlat(), (16.0 - 0.04) / 18.0,
+            "water flat brake cache");
+        requireClose(profile.brakeLandSlope(), (16.0 - 0.32) / 18.0,
+            "land slope brake cache");
+        requireClose(profile.brakeWaterSlope(), (16.0 - 0.08) / 18.0,
+            "water slope brake cache");
     }
 
-    private static void testArbitraryStartUsesTheSameAcceleration() {
-        double acceleration = SpeedProfile.configuredAcceleration(1.2, 5);
-        double ticksFromVanilla = (1.2 - 0.4) / acceleration;
-        requireClose(ticksFromVanilla, 200.0 / 3.0, "remaining ticks from vanilla speed");
-        requireClose(
-            SpeedProfile.moveTowards(0.4, 1.2, acceleration, ticksFromVanilla),
-            1.2,
-            "arbitrary start reaches max with fixed acceleration"
-        );
-        requireClose(
-            SpeedProfile.moveTowards(2.0, 1.2, acceleration, ticksFromVanilla),
-            1.2,
-            "live max reduction uses the same acceleration magnitude"
-        );
-        require(
-            acceleration < 0.06,
-            "the old vanilla powered-rail acceleration floor must not remain"
-        );
+    private static void testActivationAndHandoffBoundaries() {
+        int effective = PhysicsProfile.effectiveActivationBlocks(9);
+        RailPathScanner.PoweredPath nPlus7 = path(16, false, true, 15.75, 16.75);
+        RailPathScanner.PoweredPath nPlus8 = path(17, false, true, 16.75, 17.75);
+        RailPathScanner.PoweredPath nPlus9 = path(18, false, false, 17.75, 18.75);
+
+        require(!MinecartSpeedManager.hasActivationDistance(true, nPlus7, effective),
+            "N+7 loaded rails must not activate");
+        require(MinecartSpeedManager.hasActivationDistance(true, nPlus8, effective),
+            "N+8 confirmed powered rails activate");
+        require(MinecartSpeedManager.hasActivationDistance(true, nPlus9, effective),
+            "N+9 confirmed powered rails activate");
+        require(!MinecartSpeedManager.hasActivationDistance(false, nPlus9, effective),
+            "the rail under the cart must be powered");
+
+        RailPathScanner.PoweredPath knownEnd = path(17, true, false, 16.75, 17.75);
+        requireClose(MinecartSpeedManager.handoffDistance(knownEnd), 9.75,
+            "handoff remains the entry to the last eight powered rails");
+        require(Double.isInfinite(MinecartSpeedManager.handoffDistance(nPlus8)),
+            "an unloaded boundary is never a handoff target");
+        require(MinecartSpeedManager.missedHandoffBoundary(path(7, true, false, 6.75, 7.75)),
+            "a shortened path already inside the last eight rails hands off immediately");
     }
 
-    private static void testLiveSecondsWaitForTheNextPhase() {
+    private static void testTrackSpeedConversions() {
+        requireClose(RailGeometryMover.horizontalSpeedFromTrack(4.0, false), 4.0,
+            "flat horizontal speed equals track speed");
+        requireClose(RailGeometryMover.horizontalSpeedFromTrack(4.0, true), 4.0 / SQRT_TWO,
+            "slope horizontal component uses the square-root-two conversion");
+        requireClose(
+            RailGeometryMover.trackSpeedFromHorizontal(4.0 / SQRT_TWO, true),
+            4.0,
+            "slope activation reconstructs track speed without a jump"
+        );
+        requireClose(RailGeometryMover.trackSpeedFromHorizontal(0.4, true),
+            0.4 * SQRT_TWO, "vanilla slope entry converts to track speed");
+    }
+
+    private static void testFixedTrackAcceleration() {
+        PhysicsProfile profile = PhysicsProfile.defaults(config(1.2, 16, 5));
         MinecartSpeedState state = new MinecartSpeedState();
-        double fiveSecondAcceleration = SpeedProfile.configuredAcceleration(1.2, 5);
-        state.setTimedPhase(0.4, 1.2, fiveSecondAcceleration);
-
-        double tenSecondAcceleration = SpeedProfile.configuredAcceleration(1.2, 10);
-        requireClose(state.phaseAcceleration(), fiveSecondAcceleration,
-            "active phase keeps its acceleration snapshot");
-        requireClose(tenSecondAcceleration, 0.006, "next phase uses the new seconds value");
+        state.setSpeed(0.0);
+        state.startPhase(MinecartSpeedMode.ACCELERATING, 1.2, profile, false, false);
+        for (int tick = 0; tick < 100; tick++) {
+            state.setSpeed(MinecartSpeedManager.advancePhaseSpeed(state, false));
+        }
+        requireClose(state.speed(), 1.2,
+            "zero to maxSpeed takes accelerationSeconds in track-distance units");
+        require(state.mode() == MinecartSpeedMode.HIGH_SPEED,
+            "track acceleration completes at the configured target");
     }
 
-    private static void testConstantRailEndBraking() {
-        double startSpeed = 4.0;
-        double targetSpeed = 0.4;
-        double distance = 15.0;
-        double acceleration = SpeedProfile.brakingAcceleration(startSpeed, targetSpeed, distance);
-        requireClose(acceleration, 0.528, "constant braking acceleration");
+    private static void testFlatAndSlopeBrakeCaches() {
+        PhysicsProfile profile = PhysicsProfile.defaults(config(4.0, 9, 30));
+        MinecartSpeedState flat = new MinecartSpeedState();
+        flat.setSpeed(4.0);
+        flat.startPhase(MinecartSpeedMode.DECELERATING, 0.4, profile, true, false);
         requireClose(
-            SpeedProfile.distance(startSpeed, targetSpeed, acceleration),
-            distance,
-            "braking distance round trip"
-        );
-        requireClose(
-            SpeedProfile.speedAt(startSpeed, targetSpeed, distance, distance),
-            targetSpeed,
-            "final powered rail entry speed"
+            MinecartSpeedManager.advancePhaseSpeed(flat, false),
+            4.0 - profile.brakeLandFlat(),
+            "flat rail-end braking uses the flat cache"
         );
 
-        double stepDistance = distance / SAMPLE_COUNT;
-        double previousSpeed = startSpeed;
-        for (int step = 1; step <= SAMPLE_COUNT; step++) {
-            double speed = SpeedProfile.speedAt(
-                startSpeed,
-                targetSpeed,
-                stepDistance * step,
-                distance
-            );
-            double measuredAcceleration = (previousSpeed * previousSpeed - speed * speed)
-                / (2.0 * stepDistance);
-            requireClose(measuredAcceleration, acceleration, "constant braking sample " + step);
-            previousSpeed = speed;
+        MinecartSpeedState slope = new MinecartSpeedState();
+        slope.setSpeed(4.0);
+        slope.startPhase(
+            MinecartSpeedMode.DECELERATING,
+            0.4 * SQRT_TWO,
+            profile,
+            true,
+            true
+        );
+        requireClose(
+            MinecartSpeedManager.advancePhaseSpeed(slope, false),
+            4.0 - profile.brakeLandSlope(),
+            "slope rail-end braking uses the slope cache"
+        );
+        requireClose(PhysicsProfile.brakingAcceleration(1.2, 1.4, 9), 0.0,
+            "a vanilla track target above custom max never creates active braking");
+    }
+
+    private static void testPhaseSnapshotsAndLiveMaxReduction() {
+        PhysicsProfile oldProfile = PhysicsProfile.defaults(config(4.0, 128, 30));
+        PhysicsProfile changedSeconds = PhysicsProfile.defaults(config(4.0, 128, 60));
+        MinecartSpeedState state = new MinecartSpeedState();
+        state.setSpeed(1.0);
+        state.startPhase(MinecartSpeedMode.ACCELERATING, 4.0, oldProfile, false, false);
+        requireClose(state.acceleration(), 4.0 / 600.0,
+            "active phase snapshots the old acceleration");
+        requireClose(changedSeconds.acceleration(), 4.0 / 1200.0,
+            "changed seconds is available to the next phase");
+
+        PhysicsProfile reduced = PhysicsProfile.defaults(config(2.0, 128, 30));
+        state.setSpeed(3.0);
+        state.startPhase(MinecartSpeedMode.DECELERATING, 2.0, reduced, false, true);
+        requireClose(
+            MinecartSpeedManager.advancePhaseSpeed(state, false),
+            Math.max(2.0, 3.0 - reduced.brakeLandSlope()),
+            "live max reduction snapshots the selected track geometry cache"
+        );
+    }
+
+    private static void testUnloadedFreezeAndCollisionCooldown() {
+        PhysicsProfile profile = PhysicsProfile.defaults(config(4.0, 128, 30));
+        MinecartSpeedState state = new MinecartSpeedState();
+        state.setSpeed(2.0);
+        state.setDirection(new Vec3d(1.0, 0.0, 0.0));
+        state.startPhase(MinecartSpeedMode.ACCELERATING, 4.0, profile, false, false);
+        state.beginTick();
+        state.setSpeed(MinecartSpeedManager.advancePhaseSpeed(state, false));
+        state.startPhase(
+            MinecartSpeedMode.DECELERATING,
+            1.0,
+            PhysicsProfile.defaults(config(2.0, 9, 10)),
+            false,
+            true
+        );
+        state.restoreFrozenTick();
+        requireClose(state.speed(), 2.0, "unloaded boundary restores tick-start track speed");
+        require(state.mode() == MinecartSpeedMode.ACCELERATING,
+            "unloaded boundary restores tick-start phase");
+        requireClose(state.acceleration(), profile.acceleration(),
+            "unloaded boundary restores phase constants");
+
+        state.resetToNormal(0.4, new Vec3d(1.0, 0.0, 0.0), 1);
+        require(state.normalCooldownTicks() == 1,
+            "collision schedules one complete NORMAL tick");
+        state.consumeNormalCooldownTick();
+        require(state.normalCooldownTicks() == 0,
+            "the full NORMAL tick consumes the collision cooldown");
+    }
+
+    private static void testExperimentalRetentionCompensation() {
+        requireClose(PhysicsProfile.experimentalRetention(true, false), 0.997,
+            "occupied land retention");
+        requireClose(PhysicsProfile.experimentalRetention(false, false), 0.975,
+            "empty land retention");
+        requireClose(PhysicsProfile.experimentalRetention(true, true), 0.997 * 0.95,
+            "occupied water retention");
+        requireClose(PhysicsProfile.experimentalRetention(false, true), 0.975 * 0.95,
+            "empty water retention");
+        for (boolean passengers : new boolean[]{false, true}) {
+            for (boolean water : new boolean[]{false, true}) {
+                requireClose(
+                    MinecartSpeedManager.frictionCompensatedSpeed(4.0, passengers, water),
+                    4.0,
+                    "retention compensation preserves final track speed"
+                );
+            }
         }
     }
 
-    private static void testActivationCountsOnlyFullRailsAhead() {
-        int activeBlocks = 16;
-        RailPathScanner.PoweredPath below = path(15, true, false, 14.75, 15.75, 15L);
-        RailPathScanner.PoweredPath equal = path(16, false, false, 15.75, 16.75, 16L);
-        RailPathScanner.PoweredPath above = path(17, false, false, 16.75, 17.75, 17L);
-
-        require(!MinecartSpeedManager.hasActivationDistance(true, below, activeBlocks),
-            "activeBlocks-1 full rails must not activate");
-        require(MinecartSpeedManager.hasActivationDistance(true, equal, activeBlocks),
-            "exactly activeBlocks full rails must activate");
-        require(MinecartSpeedManager.hasActivationDistance(true, above, activeBlocks),
-            "more than activeBlocks full rails must activate");
-        require(!MinecartSpeedManager.hasActivationDistance(false, above, activeBlocks),
-            "the current rail must also be powered");
+    private static void testNoSlopeGravityAdjustment() {
+        PhysicsProfile profile = PhysicsProfile.defaults(config(4.0, 128, 30));
+        for (boolean water : new boolean[]{false, true}) {
+            MinecartSpeedState state = new MinecartSpeedState();
+            state.setSpeed(4.0);
+            state.startPhase(MinecartSpeedMode.HIGH_SPEED, 4.0, profile, false, false);
+            for (int tick = 0; tick < 256; tick++) {
+                state.setSpeed(MinecartSpeedManager.advancePhaseSpeed(state, water));
+                requireClose(state.speed(), 4.0,
+                    "slope gravity must not alter HIGH_SPEED at tick " + tick);
+            }
+        }
     }
 
-    private static void testUnloadedBoundaryDoesNotLowerThresholdOrBrake() {
-        RailPathScanner.PoweredPath fiveThenUnloaded = path(5, false, true, 4.75, 5.75, 5L);
-        RailPathScanner.PoweredPath sixteenThenUnloaded = path(16, false, true, 15.75, 16.75, 16L);
-
-        require(!MinecartSpeedManager.hasActivationDistance(true, fiveThenUnloaded, 64),
-            "five confirmed rails cannot replace an activeBlocks=64 threshold");
-        require(MinecartSpeedManager.hasActivationDistance(true, sixteenThenUnloaded, 16),
-            "confirmed rails may activate even when the following chunk is unknown");
-        require(!MinecartSpeedManager.shouldBrakeForConfirmedEnd(true, fiveThenUnloaded, 16),
-            "an unloaded boundary is not a real powered-rail end");
-        require(Double.isInfinite(MinecartSpeedManager.brakeBoundaryDistance(fiveThenUnloaded, 16)),
-            "an unloaded boundary has no braking boundary");
+    private static void testGeometryBudgetsAndSubsteps() {
+        double slopeHorizontal = RailGeometryMover.horizontalMovementBudget(4.0, true);
+        requireClose(slopeHorizontal, 4.0 / SQRT_TWO,
+            "slope horizontal movement consumes a square-root-two track budget");
+        requireClose(RailGeometryMover.horizontalMovementBudget(4.0, false), 4.0,
+            "flat horizontal movement equals track budget");
+        requireClose(Math.hypot(slopeHorizontal, slopeHorizontal), 4.0,
+            "slope three-dimensional movement equals configured track speed");
+        require(RailGeometryMover.minimumSubstepCount(slopeHorizontal) == 4,
+            "track speed four uses four horizontal slope substeps");
+        require(RailGeometryMover.minimumSubstepCount(4.0) == 6,
+            "track speed four uses six flat substeps");
+        require(RailGeometryMover.minimumSubstepCount(48.0) == RailGeometryMover.MAX_SUBSTEPS,
+            "the exact 64-substep flat budget is supported");
     }
 
-    private static void testBrakeBoundaryAndFinalRailTarget() {
-        RailPathScanner.PoweredPath shortKnownEnd = path(15, true, false, 14.75, 15.75, 15L);
-        RailPathScanner.PoweredPath exactKnownEnd = path(16, true, false, 15.75, 16.75, 16L);
-        RailPathScanner.PoweredPath currentRailIsLast = path(0, true, false, -0.25, 0.75, 99L);
+    private static void testRailGeometry() {
+        Vec3i flatBack = new Vec3i(-1, 0, 0);
+        Vec3i flatForward = new Vec3i(1, 0, 0);
+        Vec3i curveForward = new Vec3i(0, 0, 1);
+        Vec3i slopeBack = new Vec3i(-1, -1, 0);
+        Vec3i slopeForward = new Vec3i(1, 0, 0);
+        requireClose(RailGeometryMover.segmentTrackLength(flatBack, flatForward), 1.0,
+            "flat rail track length is one");
+        requireClose(RailGeometryMover.segmentTrackLength(flatBack, curveForward), Math.sqrt(0.5),
+            "flat curve keeps its existing chord geometry");
+        requireClose(RailGeometryMover.segmentTrackLength(slopeBack, slopeForward), SQRT_TWO,
+            "slope rail track length is square root two");
+        requireClose(RailGeometryMover.trackFactor(slopeBack, slopeForward), SQRT_TWO,
+            "slope track-to-horizontal factor is square root two");
 
-        require(MinecartSpeedManager.shouldBrakeForConfirmedEnd(true, shortKnownEnd, 16),
-            "a confirmed end below activeBlocks must brake");
-        require(!MinecartSpeedManager.shouldBrakeForConfirmedEnd(true, exactKnownEnd, 16),
-            "an exact activeBlocks distance starts braking only after the next boundary");
-        requireClose(
-            MinecartSpeedManager.brakeBoundaryDistance(exactKnownEnd, 16),
-            0.75,
-            "exact threshold boundary is the next rail entry"
-        );
-        requireClose(shortKnownEnd.brakingTargetDistance(), 14.75,
-            "normal target is the last powered rail entry");
-        requireClose(currentRailIsLast.brakingTargetDistance(), 0.75,
-            "missed entry falls back to the remaining final rail distance");
-        requireClose(
-            MinecartSpeedManager.confirmedDistanceAfterTravel(16.0, 1.25),
-            14.75,
-            "confirmed distance advances with the cart"
-        );
+        BlockPos rail = new BlockPos(10, 64, 20);
+        Vec3i[][] slopes = {
+            {new Vec3i(-1, -1, 0), new Vec3i(1, 0, 0)},
+            {new Vec3i(1, -1, 0), new Vec3i(-1, 0, 0)},
+            {new Vec3i(0, -1, -1), new Vec3i(0, 0, 1)},
+            {new Vec3i(0, -1, 1), new Vec3i(0, 0, -1)}
+        };
+        for (int index = 0; index < slopes.length; index++) {
+            Vec3d start = RailGeometryMover.pointOnRail(rail, slopes[index][0], slopes[index][1], 0.0);
+            Vec3d middle = RailGeometryMover.pointOnRail(rail, slopes[index][0], slopes[index][1], 0.5);
+            Vec3d end = RailGeometryMover.pointOnRail(rail, slopes[index][0], slopes[index][1], 1.0);
+            requireClose(end.y - start.y, 1.0, "slope climbs one block " + index);
+            requireClose(middle.y - start.y, 0.5, "slope midpoint snaps by formula " + index);
+            requireClose(end.subtract(start).length(), SQRT_TWO,
+                "slope centerline distance is square root two " + index);
+        }
+    }
+
+    private static void testFullMovementTakeover() {
+        require(!MinecartSpeedManager.takeOverMovement(MinecartSpeedMode.NORMAL),
+            "NORMAL uses the server-selected vanilla controller");
+        require(MinecartSpeedManager.takeOverMovement(MinecartSpeedMode.ACCELERATING),
+            "acceleration is fully owned by the mod");
+        require(MinecartSpeedManager.takeOverMovement(MinecartSpeedMode.HIGH_SPEED),
+            "high speed is fully owned by the mod");
+        require(MinecartSpeedManager.takeOverMovement(MinecartSpeedMode.DECELERATING),
+            "deceleration is fully owned by the mod");
+        require(MinecartSpeedManager.takeOverMovement(MinecartSpeedMode.BRAKE_HOLD),
+            "brake hold is fully owned by the mod");
+    }
+
+    private static ModConfig config(double maxSpeed, int activeBlocks, int seconds) {
+        ModConfig config = ModConfig.defaults();
+        config.maxSpeed = maxSpeed;
+        config.activeBlocks = activeBlocks;
+        config.accelerationSeconds = seconds;
+        return config;
     }
 
     private static RailPathScanner.PoweredPath path(
@@ -158,21 +286,22 @@ public final class SpeedProfileSelfTest {
         boolean reachedEnd,
         boolean stoppedAtUnloaded,
         double lastRailEntryDistance,
-        double totalDistance,
-        long lastRailPos
+        double distance
     ) {
         return new RailPathScanner.PoweredPath(
-            totalDistance,
+            distance,
             fullRailsAhead,
             lastRailEntryDistance,
-            lastRailPos,
+            fullRailsAhead,
+            Long.MIN_VALUE,
             reachedEnd,
             stoppedAtUnloaded
         );
     }
 
     private static void requireClose(double actual, double expected, String label) {
-        require(Math.abs(actual - expected) <= EPSILON, label + ": expected " + expected + ", got " + actual);
+        require(Math.abs(actual - expected) <= EPSILON,
+            label + ": expected " + expected + ", got " + actual);
     }
 
     private static void require(boolean condition, String message) {

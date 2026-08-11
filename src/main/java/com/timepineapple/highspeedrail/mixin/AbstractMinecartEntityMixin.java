@@ -11,7 +11,6 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(AbstractMinecartEntity.class)
 public abstract class AbstractMinecartEntityMixin implements MinecartSpeedStateHolder {
@@ -34,13 +33,6 @@ public abstract class AbstractMinecartEntityMixin implements MinecartSpeedStateH
     private void highSpeedRail$afterTick(CallbackInfo callbackInfo) {
         if ((Object) this instanceof MinecartEntity cart && cart.getEntityWorld() instanceof ServerWorld serverWorld) {
             MinecartSpeedManager.afterVanillaTick(cart, serverWorld);
-        }
-    }
-
-    @Inject(method = "getMaxSpeed", at = @At("RETURN"), cancellable = true)
-    private void highSpeedRail$raisePerCartSpeedCap(ServerWorld world, CallbackInfoReturnable<Double> callbackInfo) {
-        if ((Object) this instanceof MinecartEntity cart) {
-            callbackInfo.setReturnValue(MinecartSpeedManager.speedCap(cart, callbackInfo.getReturnValue()));
         }
     }
 }

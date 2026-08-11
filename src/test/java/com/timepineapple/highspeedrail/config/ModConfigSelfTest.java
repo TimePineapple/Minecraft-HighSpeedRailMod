@@ -6,7 +6,7 @@ import com.google.gson.JsonParseException;
 public final class ModConfigSelfTest {
     public static void main(String[] args) {
         testLegacyThreeKeyMigration();
-        testLegacyActiveBlocksOneMigration();
+        testLegacyActiveBlocksMigration();
         testAccelerationSecondsMustBeAJsonInteger();
         testValidationLimits();
     }
@@ -18,12 +18,15 @@ public final class ModConfigSelfTest {
         require(parsed.activeBlocks == 16, "normal activeBlocks must remain unchanged");
     }
 
-    private static void testLegacyActiveBlocksOneMigration() {
-        JsonObject root = baseConfig();
-        root.addProperty("activeBlocks", 1);
-        ModConfig parsed = ModConfig.parse(root);
-        require(parsed.activeBlocks == 2, "legacy activeBlocks=1 must migrate to 2");
-        require(parsed.validationError().isEmpty(), "migrated activeBlocks must validate");
+    private static void testLegacyActiveBlocksMigration() {
+        for (int legacyValue = 1; legacyValue < ModConfig.MIN_ACTIVE_BLOCKS; legacyValue++) {
+            JsonObject root = baseConfig();
+            root.addProperty("activeBlocks", legacyValue);
+            ModConfig parsed = ModConfig.parse(root);
+            require(parsed.activeBlocks == ModConfig.MIN_ACTIVE_BLOCKS,
+                "legacy positive activeBlocks below 8 must migrate to 8");
+            require(parsed.validationError().isEmpty(), "migrated activeBlocks must validate");
+        }
     }
 
     private static void testAccelerationSecondsMustBeAJsonInteger() {
@@ -49,7 +52,7 @@ public final class ModConfigSelfTest {
         JsonObject invalidBlocks = baseConfig();
         invalidBlocks.addProperty("activeBlocks", 0);
         require(ModConfig.parse(invalidBlocks).validationError().isPresent(),
-            "activeBlocks below 2 must fail validation");
+            "non-positive activeBlocks must fail validation");
     }
 
     private static JsonObject baseConfig() {
