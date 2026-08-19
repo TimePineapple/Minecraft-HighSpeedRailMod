@@ -7,6 +7,7 @@ import com.mojang.brigadier.context.CommandContext;
 import com.timepineapple.highspeedrail.HighSpeedRail;
 import com.timepineapple.highspeedrail.config.ModConfig;
 import com.timepineapple.highspeedrail.minecart.PhysicsProfile;
+import com.timepineapple.highspeedrail.minecart.HighSpeedRailDiagnostics;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.permission.Permission;
@@ -14,6 +15,8 @@ import net.minecraft.command.permission.PermissionCheck;
 import net.minecraft.command.permission.PermissionLevel;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.entity.vehicle.MinecartEntity;
 import net.minecraft.text.Text;
 
 import java.util.function.Consumer;
@@ -26,6 +29,12 @@ public final class HighSpeedRailCommand {
                     new PermissionCheck.Require(new Permission.Level(PermissionLevel.GAMEMASTERS))
                 ))
                 .then(CommandManager.literal("get").executes(HighSpeedRailCommand::showConfig))
+                .then(CommandManager.literal("debug")
+                    .then(CommandManager.literal("start")
+                        .then(CommandManager.argument("seconds", IntegerArgumentType.integer(1, 60))
+                            .executes(HighSpeedRailCommand::startDiagnostic)))
+                    .then(CommandManager.literal("stop").executes(HighSpeedRailCommand::stopDiagnostic))
+                    .then(CommandManager.literal("status").executes(HighSpeedRailCommand::diagnosticStatus)))
                 .then(CommandManager.literal("set")
                     .then(CommandManager.literal("enable")
                         .then(CommandManager.argument("value", BoolArgumentType.bool())
@@ -83,6 +92,7 @@ public final class HighSpeedRailCommand {
                 + "aBrakeWaterSlope=" + physics.brakeWaterSlope() + "\n"
                 + "speedUnit=track-centerline-blocks-per-tick\n"
                 + "slopePhysics=no-uphill-or-downhill-gravity-adjustment\n"
+                + "activationProfile=two-normal-tick-actual-displacement-min\n"
                 + "activePhysics=experimental-retention-compensated-with-horizontal-rail-snap\n"
                 + "Startup controller limits are cached; restart the server to refresh them."
         ), false);
@@ -94,6 +104,51 @@ public final class HighSpeedRailCommand {
             .getModContainer(HighSpeedRail.MOD_ID)
             .map(container -> container.getMetadata().getVersion().getFriendlyString())
             .orElse("unknown");
+    }
+
+    private static int startDiagnostic(CommandContext<ServerCommandSource> context) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+        if (player == null) {
+            return error(context, "debug start must be executed by a player riding an ordinary minecart");
+        }
+        if (!(player.getVehicle() instanceof MinecartEntity cart)) {
+            return error(context, "you must be riding an ordinary minecart");
+        }
+        int seconds = IntegerArgumentType.getInteger(context, "seconds");
+        HighSpeedRailDiagnostics.StartResult result = HighSpeedRailDiagnostics.start(
+            context.getSource().getServer(), player, cart, seconds
+        );
+        if (!result.success()) {
+            return error(context, result.message());
+        }
+        context.getSource().sendFeedback(
+            () -> Text.literal("highSpeedRail diagnostic started: " + result.path()),
+            false
+        );
+        return 1;
+    }
+
+    private static int stopDiagnostic(CommandContext<ServerCommandSource> context) {
+        HighSpeedRailDiagnostics.StopResult result = HighSpeedRailDiagnostics.stop("manual_stop");
+        if (!result.success()) {
+            return error(context, result.message());
+        }
+        context.getSource().sendFeedback(
+            () -> Text.literal("highSpeedRail diagnostic saved: " + result.path()),
+            false
+        );
+        return 1;
+    }
+
+    private static int diagnosticStatus(CommandContext<ServerCommandSource> context) {
+        HighSpeedRailDiagnostics.Status status = HighSpeedRailDiagnostics.status();
+        String message = status.active()
+            ? "highSpeedRail diagnostic active: " + status.elapsedTicks() + "/"
+                + status.durationTicks() + " ticks, file=" + status.path()
+            : "highSpeedRail diagnostic inactive; lastFile=" + status.path()
+                + ", lastReason=" + status.lastReason();
+        context.getSource().sendFeedback(() -> Text.literal(message), false);
+        return 1;
     }
 
     private static int updateDouble(

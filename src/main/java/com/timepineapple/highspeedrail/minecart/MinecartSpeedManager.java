@@ -5,6 +5,7 @@ import com.timepineapple.highspeedrail.config.ModConfig;
 import net.minecraft.block.AbstractRailBlock;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.enums.RailShape;
+import net.minecraft.predicate.entity.EntityPredicates;
 import net.minecraft.entity.vehicle.AbstractMinecartEntity;
 import net.minecraft.entity.vehicle.MinecartEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -19,69 +20,84 @@ public final class MinecartSpeedManager {
 
     public static void beforeVanillaTick(MinecartEntity cart, ServerWorld world) {
         MinecartSpeedState state = state(cart);
-        state.beginTick();
-        ModConfig config = HighSpeedRail.config();
-        PhysicsProfile currentProfile = HighSpeedRail.physicsProfile();
+        HighSpeedRailDiagnostics.headBefore(cart, world, state);
+        try {
+            state.beginTick();
+            ModConfig config = HighSpeedRail.config();
+            PhysicsProfile currentProfile = HighSpeedRail.physicsProfile();
 
-        if (!config.enable || !cart.isAlive() || !finite(cart.getVelocity())) {
-            if (state.mode() != MinecartSpeedMode.NORMAL) {
-                leaveActive(cart, state, currentProfile.vanillaSpeed(cart.isTouchingWater()), 0);
-            }
-            return;
-        }
-
-        if (state.mode() == MinecartSpeedMode.NORMAL) {
-            if (state.normalCooldownTicks() > 0) {
-                state.consumeNormalCooldownTick();
+            if (!config.enable || !cart.isAlive() || !finite(cart.getVelocity())) {
+                state.clearActivationCandidate();
+                state.clearNormalMotionSamples();
+                if (state.mode() != MinecartSpeedMode.NORMAL) {
+                    leaveActive(cart, state, currentProfile.vanillaSpeed(cart.isTouchingWater()), 0);
+                }
                 return;
             }
-            tryActivate(cart, world, state, currentProfile);
-            return;
-        }
 
-        prepareActiveTick(cart, world, state, currentProfile);
+            if (state.mode() == MinecartSpeedMode.NORMAL) {
+                beginNormalTickSample(cart, world, state);
+                if (state.normalCooldownTicks() > 0) {
+                    state.clearActivationCandidate();
+                    state.consumeNormalCooldownTick();
+                    return;
+                }
+                tryActivate(cart, world, state, currentProfile);
+                return;
+            }
+
+            prepareActiveTick(cart, world, state, currentProfile);
+        } finally {
+            HighSpeedRailDiagnostics.headAfter(cart, world, state);
+        }
     }
 
     public static void afterVanillaTick(MinecartEntity cart, ServerWorld world) {
         MinecartSpeedState state = state(cart);
-        if (state.mode() == MinecartSpeedMode.NORMAL) {
-            return;
-        }
-
-        RailGeometryMover.MovementResult result = state.movementResult();
-        PhysicsProfile profile = HighSpeedRail.physicsProfile();
-        switch (result.outcome()) {
-            case WAITING_UNLOADED -> {
-                state.restoreFrozenTick();
-                state.setDirection(result.endingTangent());
-                cart.setVelocity(Vec3d.ZERO);
+        HighSpeedRailDiagnostics.tailBefore(cart, world, state);
+        try {
+            if (state.mode() == MinecartSpeedMode.NORMAL) {
+                finishNormalVanillaTick(cart, world, state);
+                return;
             }
-            case COLLISION -> leaveAfterCollision(cart, state, 1);
-            case HANDOFF -> {
-                state.setDirection(result.endingTangent());
-                leaveActive(
+
+            RailGeometryMover.MovementResult result = state.movementResult();
+            PhysicsProfile profile = HighSpeedRail.physicsProfile();
+            switch (result.outcome()) {
+                case WAITING_UNLOADED -> {
+                    state.restoreFrozenTick();
+                    state.setDirection(result.endingTangent());
+                    cart.setVelocity(Vec3d.ZERO);
+                }
+                case COLLISION -> leaveAfterCollision(cart, state, 1);
+                case HANDOFF -> {
+                    state.setDirection(result.endingTangent());
+                    leaveActive(
+                        cart,
+                        state,
+                        profile.vanillaSpeed(cart.isTouchingWater()),
+                        0
+                    );
+                }
+                case MOVED, SUBSTEP_LIMIT -> {
+                    if (movementWasInterrupted(cart.getVelocity(), result)) {
+                        leaveAfterCollision(cart, state, 1);
+                    } else {
+                        state.clearUnloadedBoundaryWait();
+                        state.setSpeed(result.endingTrackSpeed());
+                        state.setDirection(result.endingTangent());
+                        cart.setVelocity(state.direction().multiply(result.endingHorizontalSpeed()));
+                    }
+                }
+                case NONE -> leaveActive(
                     cart,
                     state,
                     profile.vanillaSpeed(cart.isTouchingWater()),
-                    0
+                    1
                 );
             }
-            case MOVED, SUBSTEP_LIMIT -> {
-                if (movementWasInterrupted(cart.getVelocity(), result)) {
-                    leaveAfterCollision(cart, state, 1);
-                } else {
-                    state.clearUnloadedBoundaryWait();
-                    state.setSpeed(result.endingTrackSpeed());
-                    state.setDirection(result.endingTangent());
-                    cart.setVelocity(state.direction().multiply(result.endingHorizontalSpeed()));
-                }
-            }
-            case NONE -> leaveActive(
-                cart,
-                state,
-                profile.vanillaSpeed(cart.isTouchingWater()),
-                1
-            );
+        } finally {
+            HighSpeedRailDiagnostics.tailAfter(cart, world, state);
         }
     }
 
@@ -93,27 +109,32 @@ public final class MinecartSpeedManager {
     ) {
         BlockPos railPos = cart.getRailOrMinecartPos();
         if (!world.isChunkLoaded(railPos)) {
+            state.clearActivationCandidate();
             return;
         }
         BlockState railState = world.getBlockState(railPos);
         if (!RailPathScanner.isPoweredRail(railState)) {
+            state.clearActivationCandidate();
             return;
         }
 
         Vec3d velocity = cart.getVelocity();
         if (velocity.horizontalLengthSquared() < MIN_DIRECTION_SQUARED) {
+            state.clearActivationCandidate();
             return;
         }
         RailPathScanner.RailFrame frame = RailPathScanner.frame(
             railPos, railState, cart.getEntityPos(), velocity
         );
         if (frame == null) {
+            state.clearActivationCandidate();
             return;
         }
 
         boolean slope = isSlope(frame);
         double vanillaTrack = profile.vanillaTrackSpeed(cart.isTouchingWater(), slope);
         if (profile.configuredMaxSpeed() <= vanillaTrack + EPSILON || profile.acceleration() <= 0.0) {
+            state.clearActivationCandidate();
             return;
         }
 
@@ -121,13 +142,34 @@ public final class MinecartSpeedManager {
             world, railPos, cart.getEntityPos(), frame.tangent(), profile.effectiveActivationBlocks(),
             Math.max(profile.configuredMaxSpeed(), RailPathScanner.railSpeed(velocity, frame.tangent()))
         );
+        HighSpeedRailDiagnostics.recordScan(cart, "activation", true, path);
         if (!hasActivationDistance(true, path, profile.effectiveActivationBlocks())) {
+            state.clearActivationCandidate();
             return;
         }
 
-        double speed = RailGeometryMover.trackSpeedFromHorizontal(
-            RailPathScanner.railSpeed(velocity, frame.tangent()), slope
+        if (!state.hasActivationCandidate()) {
+            state.armActivationCandidate(frame.tangent());
+            return;
+        }
+        if (!sameRailDirection(state.activationDirection(), frame.tangent())) {
+            state.clearActivationCandidate();
+            state.armActivationCandidate(frame.tangent());
+            return;
+        }
+        if (!state.activationCandidateReady()) {
+            return;
+        }
+
+        double speed = initialActivationTrackSpeed(
+            state.activationFirstHorizontalSpeed(),
+            state.activationSecondHorizontalSpeed(),
+            slope,
+            profile.configuredMaxSpeed(),
+            profile.acceleration()
         );
+        state.clearActivationCandidate();
+        state.clearNormalMotionSamples();
         state.setSpeed(speed);
         state.setDirection(frame.tangent());
         MinecartSpeedMode mode = speed + EPSILON < profile.configuredMaxSpeed()
@@ -137,6 +179,96 @@ public final class MinecartSpeedManager {
         cart.setVelocity(state.direction().multiply(
             RailGeometryMover.horizontalSpeedFromTrack(speed, slope)
         ));
+    }
+
+    private static void beginNormalTickSample(
+        MinecartEntity cart,
+        ServerWorld world,
+        MinecartSpeedState state
+    ) {
+        BlockPos railPos = cart.getRailOrMinecartPos();
+        Vec3d velocity = cart.getVelocity();
+        if (!world.isChunkLoaded(railPos)
+            || !finite(velocity)
+            || velocity.horizontalLengthSquared() < MIN_DIRECTION_SQUARED) {
+            state.clearActivationCandidate();
+            state.clearNormalMotionSamples();
+            return;
+        }
+        BlockState railState = world.getBlockState(railPos);
+        if (!(railState.getBlock() instanceof AbstractRailBlock)) {
+            state.clearActivationCandidate();
+            state.clearNormalMotionSamples();
+            return;
+        }
+        RailPathScanner.RailFrame frame = RailPathScanner.frame(
+            railPos, railState, cart.getEntityPos(), velocity
+        );
+        if (frame == null) {
+            state.clearActivationCandidate();
+            state.clearNormalMotionSamples();
+            return;
+        }
+        state.beginNormalTickSample(
+            cart.getEntityPos(), frame.tangent(), world.getRegistryKey()
+        );
+    }
+
+    private static void finishNormalVanillaTick(
+        MinecartEntity cart,
+        ServerWorld world,
+        MinecartSpeedState state
+    ) {
+        if (!state.normalTickSampleActive()) {
+            return;
+        }
+        Vec3d velocity = cart.getVelocity();
+        BlockPos railPos = cart.getRailOrMinecartPos();
+        double displacement = cart.getEntityPos().distanceTo(state.normalTickStartPosition());
+        double teleportLimit = Math.max(
+            4.0,
+            HighSpeedRail.config().maxSpeed * 6.0
+        );
+        if (!cart.isAlive()
+            || !finite(velocity)
+            || !world.getRegistryKey().equals(state.normalTickWorld())
+            || !world.isChunkLoaded(railPos)
+            || cart.horizontalCollision
+            || displacement > teleportLimit
+            || hasCandidateEntityContact(world, cart)) {
+            state.clearActivationCandidate();
+            state.clearNormalMotionSamples();
+            return;
+        }
+        BlockState railState = world.getBlockState(railPos);
+        if (!(railState.getBlock() instanceof AbstractRailBlock)) {
+            state.clearActivationCandidate();
+            state.clearNormalMotionSamples();
+            return;
+        }
+        RailPathScanner.RailFrame endFrame = RailPathScanner.frame(
+            railPos, railState, cart.getEntityPos(), state.normalTickDirection()
+        );
+        if (endFrame == null
+            || !sameRailDirection(state.normalTickDirection(), endFrame.tangent())) {
+            state.clearActivationCandidate();
+            state.clearNormalMotionSamples();
+            return;
+        }
+        double actualHorizontal = actualProjectedHorizontalDistance(
+            state.normalTickStartPosition(),
+            cart.getEntityPos(),
+            state.normalTickDirection()
+        );
+        if (!Double.isFinite(actualHorizontal)) {
+            state.clearActivationCandidate();
+            state.clearNormalMotionSamples();
+            return;
+        }
+        if (state.hasActivationCandidate() && !RailPathScanner.isPoweredRail(railState)) {
+            state.clearActivationCandidate();
+        }
+        state.completeNormalTickSample(actualHorizontal, endFrame.tangent());
     }
 
     private static void prepareActiveTick(
@@ -173,6 +305,7 @@ public final class MinecartSpeedManager {
         RailPathScanner.PoweredPath path = scan(
             world, railPos, cart.getEntityPos(), state.direction(), effective, state.speed()
         );
+        HighSpeedRailDiagnostics.recordScan(cart, "active", true, path);
         if (state.waitingAtUnloadedBoundary() && path.stoppedAtUnloadedChunk()) {
             cart.setVelocity(state.direction().multiply(
                 RailGeometryMover.horizontalSpeedFromTrack(state.speed(), currentSlope)
@@ -333,6 +466,59 @@ public final class MinecartSpeedManager {
         return PhysicsProfile.compensatedSpeed(desiredSpeed, hasPassengers, touchingWater);
     }
 
+    static double stableActivationHorizontalSpeed(double first, double second) {
+        if (!Double.isFinite(first) || !Double.isFinite(second) || first < 0.0 || second < 0.0) {
+            return 0.0;
+        }
+        return Math.min(first, second);
+    }
+
+    static double actualProjectedHorizontalDistance(
+        Vec3d start,
+        Vec3d end,
+        Vec3d direction
+    ) {
+        if (!finite(start) || !finite(end)
+            || direction.horizontalLengthSquared() < MIN_DIRECTION_SQUARED) {
+            return Double.NaN;
+        }
+        return Math.abs(end.subtract(start).getHorizontal().dotProduct(
+            direction.getHorizontal().normalize()
+        ));
+    }
+
+    static double initialActivationTrackSpeed(
+        double firstHorizontal,
+        double secondHorizontal,
+        boolean slope,
+        double maxSpeed,
+        double acceleration
+    ) {
+        double stableTrack = RailGeometryMover.trackSpeedFromHorizontal(
+            stableActivationHorizontalSpeed(firstHorizontal, secondHorizontal), slope
+        );
+        if (stableTrack + EPSILON >= maxSpeed) {
+            return stableTrack;
+        }
+        return Math.min(maxSpeed, stableTrack + Math.max(0.0, acceleration));
+    }
+
+    static boolean sameDirection(Vec3d first, Vec3d second) {
+        return first.horizontalLengthSquared() >= MIN_DIRECTION_SQUARED
+            && second.horizontalLengthSquared() >= MIN_DIRECTION_SQUARED
+            && first.getHorizontal().dotProduct(second.getHorizontal()) > 0.0;
+    }
+
+    static boolean sameRailDirection(Vec3d first, Vec3d second) {
+        if (first.horizontalLengthSquared() < MIN_DIRECTION_SQUARED
+            || second.horizontalLengthSquared() < MIN_DIRECTION_SQUARED) {
+            return false;
+        }
+        return first.getHorizontal().normalize().dotProduct(
+            second.getHorizontal().normalize()
+        ) >= 1.0 - 1.0E-6;
+    }
+
     private static boolean isSlope(RailPathScanner.RailFrame frame) {
         return frame.backwardEndpoint().getY() != frame.forwardEndpoint().getY();
     }
@@ -407,6 +593,15 @@ public final class MinecartSpeedManager {
         }
         Vec3d expected = result.endingTangent().multiply(result.endingHorizontalSpeed());
         return actualVelocity.getHorizontal().subtract(expected).lengthSquared() > 1.0E-6;
+    }
+
+    private static boolean hasCandidateEntityContact(ServerWorld world, MinecartEntity cart) {
+        return !world.getOtherEntities(
+            cart,
+            cart.getBoundingBox().expand(0.2, 0.0, 0.2),
+            EntityPredicates.canBePushedBy(cart)
+                .and(entity -> !cart.isConnectedThroughVehicle(entity))
+        ).isEmpty();
     }
 
     private static MinecartSpeedState state(AbstractMinecartEntity cart) {

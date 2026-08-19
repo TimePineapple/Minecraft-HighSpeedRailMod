@@ -1,6 +1,8 @@
 package com.timepineapple.highspeedrail.minecart;
 
 import net.minecraft.util.math.Vec3d;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.world.World;
 
 public final class MinecartSpeedState {
     private MinecartSpeedMode mode = MinecartSpeedMode.NORMAL;
@@ -18,6 +20,18 @@ public final class MinecartSpeedState {
     private boolean railEndBrake;
     private boolean waitingAtUnloadedBoundary;
     private int normalCooldownTicks;
+    private boolean activationCandidate;
+    private int activationSampleCount;
+    private double activationFirstHorizontalSpeed;
+    private double activationSecondHorizontalSpeed;
+    private Vec3d activationDirection = Vec3d.ZERO;
+    private boolean normalSampleValid;
+    private double normalSampleHorizontalSpeed;
+    private Vec3d normalSampleDirection = Vec3d.ZERO;
+    private boolean normalTickSampleActive;
+    private Vec3d normalTickStartPosition = Vec3d.ZERO;
+    private Vec3d normalTickDirection = Vec3d.ZERO;
+    private RegistryKey<World> normalTickWorld;
     private double tickStartSpeed;
     private MinecartSpeedMode tickStartMode = MinecartSpeedMode.NORMAL;
     private double tickStartTargetSpeed;
@@ -169,6 +183,115 @@ public final class MinecartSpeedState {
         }
     }
 
+    public boolean hasActivationCandidate() {
+        return activationCandidate;
+    }
+
+    public boolean activationCandidateReady() {
+        return activationCandidate && activationSampleCount >= 2;
+    }
+
+    public int activationSampleCount() {
+        return activationSampleCount;
+    }
+
+    public double activationFirstHorizontalSpeed() {
+        return activationFirstHorizontalSpeed;
+    }
+
+    public double activationSecondHorizontalSpeed() {
+        return activationSecondHorizontalSpeed;
+    }
+
+    public Vec3d activationDirection() {
+        return activationDirection;
+    }
+
+    public Vec3d normalTickStartPosition() {
+        return normalTickStartPosition;
+    }
+
+    public void armActivationCandidate(Vec3d direction) {
+        activationCandidate = true;
+        activationSampleCount = 0;
+        activationFirstHorizontalSpeed = 0.0;
+        activationSecondHorizontalSpeed = 0.0;
+        activationDirection = direction.getHorizontal().normalize();
+        if (normalSampleValid && MinecartSpeedManager.sameRailDirection(
+            normalSampleDirection, activationDirection
+        )) {
+            addActivationSample(normalSampleHorizontalSpeed, normalSampleDirection);
+        }
+    }
+
+    public void addActivationSample(double horizontalSpeed, Vec3d direction) {
+        if (!activationCandidate
+            || !Double.isFinite(horizontalSpeed)
+            || horizontalSpeed < 0.0
+            || !MinecartSpeedManager.sameRailDirection(activationDirection, direction)) {
+            return;
+        }
+        if (activationSampleCount == 0) {
+            activationFirstHorizontalSpeed = horizontalSpeed;
+            activationSampleCount = 1;
+        } else if (activationSampleCount == 1) {
+            activationSecondHorizontalSpeed = horizontalSpeed;
+            activationSampleCount = 2;
+        }
+    }
+
+    public void beginNormalTickSample(
+        Vec3d position,
+        Vec3d direction,
+        RegistryKey<World> world
+    ) {
+        normalTickSampleActive = true;
+        normalTickStartPosition = position;
+        normalTickDirection = direction.getHorizontal().normalize();
+        normalTickWorld = world;
+    }
+
+    public boolean normalTickSampleActive() {
+        return normalTickSampleActive;
+    }
+
+    public Vec3d normalTickDirection() {
+        return normalTickDirection;
+    }
+
+    public RegistryKey<World> normalTickWorld() {
+        return normalTickWorld;
+    }
+
+    public void completeNormalTickSample(double horizontalSpeed, Vec3d direction) {
+        normalSampleValid = true;
+        normalSampleHorizontalSpeed = Math.max(0.0, horizontalSpeed);
+        normalSampleDirection = direction.getHorizontal().normalize();
+        normalTickSampleActive = false;
+        normalTickStartPosition = Vec3d.ZERO;
+        normalTickDirection = Vec3d.ZERO;
+        normalTickWorld = null;
+        addActivationSample(normalSampleHorizontalSpeed, normalSampleDirection);
+    }
+
+    public void clearNormalMotionSamples() {
+        normalSampleValid = false;
+        normalSampleHorizontalSpeed = 0.0;
+        normalSampleDirection = Vec3d.ZERO;
+        normalTickSampleActive = false;
+        normalTickStartPosition = Vec3d.ZERO;
+        normalTickDirection = Vec3d.ZERO;
+        normalTickWorld = null;
+    }
+
+    public void clearActivationCandidate() {
+        activationCandidate = false;
+        activationSampleCount = 0;
+        activationFirstHorizontalSpeed = 0.0;
+        activationSecondHorizontalSpeed = 0.0;
+        activationDirection = Vec3d.ZERO;
+    }
+
     public long handoffRailPos() {
         return handoffRailPos;
     }
@@ -195,5 +318,7 @@ public final class MinecartSpeedState {
         waitingAtUnloadedBoundary = false;
         handoffRailPos = Long.MIN_VALUE;
         normalCooldownTicks = Math.max(0, cooldownTicks);
+        clearActivationCandidate();
+        clearNormalMotionSamples();
     }
 }

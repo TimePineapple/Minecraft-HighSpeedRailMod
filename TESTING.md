@@ -1,35 +1,54 @@
-# highSpeedRail 1.2.6 Dedicated Server 验收
+# highSpeedRail 1.2.8 验收
 
-自动构建不能替代游戏内物理测试。使用 Minecraft 1.21.11 Dedicated Fabric Server 和未安装本模组的客户端，分别以默认及 Experimental Minecart Improvements 控制器开服验收。
+本构建修复弯轨后接管弹射和坡轨支撑方块假碰撞，并保留限时诊断接口。使用 Minecraft 1.21.11 Dedicated Fabric Server和未安装本模组的客户端验收。
 
 建议配置：
 
 ```json
 {
   "enable": true,
-  "maxSpeed": 4.0,
-  "activeBlocks": 128,
-  "accelerationSeconds": 30
+  "maxSpeed": 2.0,
+  "activeBlocks": 120,
+  "accelerationSeconds": 10
 }
 ```
 
 先运行 `/highspeedrail get`，确认：
 
-- `version=1.2.6`
-- `effectiveActivationBlocks=136`
+- `version=1.2.8`
+- `effectiveActivationBlocks=128`
 - `speedUnit=track-centerline-blocks-per-tick`
 - `slopePhysics=no-uphill-or-downhill-gravity-adjustment`
+- `activationProfile=two-normal-tick-actual-displacement-min`
 - 启动控制器和缓存陆地/水中原版水平上限正确
 - 平轨/坡轨原版沿轨目标、`aAccel` 与四项 `aBrake` 正确
+
+## 三次独立采样
+
+每次只保留诊断 JAR，玩家乘坐要测试的普通矿车后执行：
+
+```mcfunction
+/highspeedrail debug start 15
+```
+
+分别生成三份 JSONL：
+
+1. 从70格动力轨一侧，以原版最大速度经过单格普通弯轨，进入超过300格的连续动力轨。
+2. 在当前全部连续供电的长坡上坡。
+3. 在同一长坡反向下坡，作为几何移动对照。
+
+到时会自动结束；也可用 `/highspeedrail debug stop` 提前结束。把三份 `logs/highspeedrail-debug-*.jsonl` 原样发送分析。若服务端每 tick 位移发生突增或坡上碰撞，按日志制定物理修复；若服务端轨迹稳定而客户端仍弹射，再进入实体同步/插值诊断。
 
 ## 激活与配置边界
 
 1. 普通轨、弯曲普通轨和不足阈值的动力轨全程保持原版。
-2. 普通轨进入第一格动力轨的当 tick 保持原版；下一 tick 脚下仍为已供电动力轨且前方满足阈值时才接管。
+2. 首次在动力轨确认满足阈值时只建立候选；取得连续两个方向一致的完整原版 tick 实际位移样本后，下一 tick 才接管。
 3. 使用 `activeBlocks=9` 测试前方 16、17、18 格完整动力轨：16 不激活，17 和 18 激活；当前脚下铁轨不计数。
 4. 未加载边界不得降低门槛、加载新区块、误判真实终点或启动制动。
 5. 静止矿车先由原版建立方向；模组不猜测静止方向。
 6. 验证旧配置迁移、整数秒校验、非法 JSON 保持最后合法配置，以及命令写回。
+7. 使用“70 格动力轨—普通弯轨—超过 300 格动力轨”线路，从短端以原版最大速度进入长端；即使实体内部速度约为 `2.054`，连续实际位移 `0.4、0.4` 也必须使首个接管 tick 严格为 `0.41`，不得瞬间达到 `maxSpeed`。
+8. 将两次样本分别构造成正常值后异常、异常后正常和持续合法高速，确认前两种过滤单 tick 峰值，后一种保留真实高速。
 
 ## 沿轨速度与坡轨
 
@@ -40,6 +59,7 @@
 5. 从平轨进入坡轨、从坡轨回到平轨时不得跳速、倒退、反弹或短暂离轨。
 6. 最终实体速度向量 Y 为 0；实际高度必须按坡面连续吸附。
 7. 载人和空车均能超过原版上限，且同配置下沿轨位移一致。
+8. 四向坡轨的水平碰撞平面均为该格 `railY+1.0625`；坡轨自身支撑方块不得触发 `movement_clipped`，真实墙体、顶棚和实体仍须触发碰撞退出。
 
 ## 加速、制动与交回
 

@@ -29,6 +29,10 @@ public final class RailGeometryMover {
 
         double phaseTrackSpeed = MinecartSpeedManager.activeProfileSpeed(cart);
         if (!Double.isFinite(phaseTrackSpeed) || phaseTrackSpeed < 0.0) {
+            HighSpeedRailDiagnostics.recordAnomaly(
+                cart, "invalid_track_speed", cart.getRailOrMinecartPos(), 0.0,
+                0.0, 0.0, phaseTrackSpeed, false
+            );
             cart.setVelocity(Vec3d.ZERO);
             record(cart, MovementResult.collision(Vec3d.ZERO));
             return true;
@@ -43,6 +47,10 @@ public final class RailGeometryMover {
         }
         BlockState railState = world.getBlockState(railPos);
         if (!RailPathScanner.isPoweredRail(railState)) {
+            HighSpeedRailDiagnostics.recordAnomaly(
+                cart, "current_rail_not_powered", railPos, 0.0,
+                0.0, 0.0, phaseTrackSpeed, false
+            );
             return finishCollision(cart, cart.getVelocity().getHorizontal(), false, 0.0, 0.0);
         }
 
@@ -51,6 +59,10 @@ public final class RailGeometryMover {
             railPos, railState, cart.getEntityPos(), direction
         );
         if (frame == null) {
+            HighSpeedRailDiagnostics.recordAnomaly(
+                cart, "current_rail_frame_missing", railPos, 0.0,
+                0.0, 0.0, phaseTrackSpeed, false
+            );
             return finishCollision(cart, direction, false, 0.0, 0.0);
         }
 
@@ -77,6 +89,10 @@ public final class RailGeometryMover {
             );
             double factor = trackFactor(frame.backwardEndpoint(), frame.forwardEndpoint());
             if (horizontalLength <= EPSILON || !Double.isFinite(factor)) {
+                HighSpeedRailDiagnostics.recordAnomaly(
+                    cart, "invalid_segment_geometry", railPos, progress,
+                    0.0, 0.0, remainingTrack, false
+                );
                 return finishCollision(
                     cart, endingTangent, isSlope(frame), horizontalTravel, trackTravel
                 );
@@ -85,6 +101,10 @@ public final class RailGeometryMover {
             double availableHorizontal = (1.0 - progress) * horizontalLength;
             while (availableHorizontal > EPSILON && remainingTrack > EPSILON) {
                 if (substeps >= MAX_SUBSTEPS) {
+                    HighSpeedRailDiagnostics.recordAnomaly(
+                        cart, "substep_limit", railPos, progress,
+                        0.0, 0.0, remainingTrack, false
+                    );
                     warnAboutLimit(world, cart, movementTrackSpeed);
                     double endingHorizontalSpeed = movementTrackSpeed / factor;
                     cart.setVelocity(endingTangent.multiply(endingHorizontalSpeed));
@@ -107,9 +127,22 @@ public final class RailGeometryMover {
                 double progressDelta = stepHorizontal / horizontalLength;
                 double nextProgress = Math.min(1.0, progress + progressDelta);
                 Vec3d before = cart.getEntityPos();
-                double collisionY = pointOnRail(
+                double railY = pointOnRail(
                     railPos, frame.backwardEndpoint(), frame.forwardEndpoint(), progress
                 ).y;
+                double collisionY = collisionPlaneY(railPos, frame);
+                if (isSlope(frame) && !world.isSpaceEmpty(
+                    cart,
+                    cart.getBoundingBox().offset(0.0, collisionY - before.y, 0.0)
+                )) {
+                    HighSpeedRailDiagnostics.recordAnomaly(
+                        cart, "collision_plane_blocked", railPos, progress,
+                        0.0, 0.0, remainingTrack, false, collisionY, railY
+                    );
+                    return finishCollision(
+                        cart, endingTangent, true, horizontalTravel, trackTravel
+                    );
+                }
                 cart.setPosition(before.x, collisionY, before.z);
                 Vec3d requestedMovement = new Vec3d(
                     endingTangent.x * stepHorizontal,
@@ -139,6 +172,20 @@ public final class RailGeometryMover {
                     railPos, frame.backwardEndpoint(), frame.forwardEndpoint(), progress
                 ));
                 if (completedFraction < 1.0 - 1.0E-4 || entityContact) {
+                    HighSpeedRailDiagnostics.recordAnomaly(
+                        cart,
+                        entityContact ? "entity_contact" : "movement_clipped",
+                        railPos,
+                        progress,
+                        stepHorizontal,
+                        actualHorizontal,
+                        remainingTrack,
+                        entityContact,
+                        collisionY,
+                        pointOnRail(
+                            railPos, frame.backwardEndpoint(), frame.forwardEndpoint(), progress
+                        ).y
+                    );
                     return finishCollision(
                         cart, endingTangent, isSlope(frame), horizontalTravel, trackTravel
                     );
@@ -164,6 +211,10 @@ public final class RailGeometryMover {
                 return true;
             }
             if (next.status() == NextRailStatus.END) {
+                HighSpeedRailDiagnostics.recordAnomaly(
+                    cart, "next_rail_missing", railPos, progress,
+                    0.0, 0.0, remainingTrack, false
+                );
                 return finishCollision(
                     cart, endingTangent, isSlope(frame), horizontalTravel, trackTravel
                 );
@@ -171,6 +222,10 @@ public final class RailGeometryMover {
 
             BlockState nextState = world.getBlockState(next.pos());
             if (!RailPathScanner.isPoweredRail(nextState)) {
+                HighSpeedRailDiagnostics.recordAnomaly(
+                    cart, "next_rail_not_powered", next.pos(), progress,
+                    0.0, 0.0, remainingTrack, false
+                );
                 return finishCollision(
                     cart, endingTangent, isSlope(frame), horizontalTravel, trackTravel
                 );
@@ -179,6 +234,10 @@ public final class RailGeometryMover {
                 next.pos(), nextState, cart.getEntityPos(), endingTangent
             );
             if (nextFrame == null) {
+                HighSpeedRailDiagnostics.recordAnomaly(
+                    cart, "next_rail_frame_missing", next.pos(), progress,
+                    0.0, 0.0, remainingTrack, false
+                );
                 return finishCollision(
                     cart, endingTangent, isSlope(frame), horizontalTravel, trackTravel
                 );
@@ -271,6 +330,17 @@ public final class RailGeometryMover {
             start.y + (end.y - start.y) * clamped,
             start.z + (end.z - start.z) * clamped
         );
+    }
+
+    static double collisionPlaneY(BlockPos railPos, RailPathScanner.RailFrame frame) {
+        return isSlope(frame)
+            ? railPos.getY() + 1.0 + RAIL_HEIGHT_OFFSET
+            : pointOnRail(
+                railPos,
+                frame.backwardEndpoint(),
+                frame.forwardEndpoint(),
+                frame.progress()
+            ).y;
     }
 
     private static boolean isSlope(RailPathScanner.RailFrame frame) {

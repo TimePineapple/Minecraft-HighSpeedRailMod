@@ -12,6 +12,8 @@ public final class SpeedProfileSelfTest {
     public static void main(String[] args) {
         testDerivedPhysics();
         testActivationAndHandoffBoundaries();
+        testActivationCandidateLifecycle();
+        testTwoSampleActivationSpeed();
         testTrackSpeedConversions();
         testFixedTrackAcceleration();
         testFlatAndSlopeBrakeCaches();
@@ -22,6 +24,7 @@ public final class SpeedProfileSelfTest {
         testGeometryBudgetsAndSubsteps();
         testRailGeometry();
         testFullMovementTakeover();
+        testDiagnosticHelpers();
     }
 
     private static void testDerivedPhysics() {
@@ -81,6 +84,77 @@ public final class SpeedProfileSelfTest {
         );
         requireClose(RailGeometryMover.trackSpeedFromHorizontal(0.4, true),
             0.4 * SQRT_TWO, "vanilla slope entry converts to track speed");
+    }
+
+    private static void testActivationCandidateLifecycle() {
+        MinecartSpeedState state = new MinecartSpeedState();
+        Vec3d direction = new Vec3d(1.0, 0.0, 0.0);
+        state.completeNormalTickSample(0.4, direction);
+        state.armActivationCandidate(direction);
+        require(state.mode() == MinecartSpeedMode.NORMAL,
+            "the first qualifying tick only arms a NORMAL candidate");
+        require(state.hasActivationCandidate(), "the activation candidate is recorded");
+        require(state.activationSampleCount() == 1,
+            "the previous complete NORMAL tick supplies the first actual movement sample");
+        require(!state.activationCandidateReady(),
+            "the candidate is not ready before the candidate vanilla tick completes");
+        state.completeNormalTickSample(0.4, direction);
+        require(state.activationCandidateReady(),
+            "two consecutive actual movement samples make the candidate ready");
+        requireClose(state.activationFirstHorizontalSpeed(), 0.4,
+            "the first projected horizontal sample is preserved");
+        requireClose(state.activationSecondHorizontalSpeed(), 0.4,
+            "the second projected horizontal sample is preserved");
+        require(MinecartSpeedManager.sameDirection(direction, new Vec3d(0.9, 0.0, 0.0)),
+            "adjacent straight powered rails keep the candidate");
+        require(!MinecartSpeedManager.sameDirection(direction, new Vec3d(-1.0, 0.0, 0.0)),
+            "a direction reversal invalidates the candidate");
+        require(!MinecartSpeedManager.sameRailDirection(direction, new Vec3d(1.0, 0.0, 1.0)),
+            "a curve direction change invalidates an actual movement sample");
+        state.clearActivationCandidate();
+        require(!state.hasActivationCandidate(), "invalid conditions clear the candidate");
+
+        state.armActivationCandidate(direction);
+        state.resetToNormal(0.4, direction, 1);
+        require(!state.hasActivationCandidate(),
+            "collision cooldown reset clears any pending candidate");
+    }
+
+    private static void testTwoSampleActivationSpeed() {
+        double acceleration = 2.0 / 200.0;
+        requireClose(
+            MinecartSpeedManager.actualProjectedHorizontalDistance(
+                new Vec3d(0.0, 64.0, 0.0),
+                new Vec3d(0.4, 64.0, 0.0),
+                new Vec3d(1.0, 0.0, 0.0)
+            ),
+            0.4,
+            "activation uses actual server displacement instead of the stored velocity vector"
+        );
+        requireClose(MinecartSpeedManager.stableActivationHorizontalSpeed(0.4, 4.0), 0.4,
+            "a second-sample spike cannot launch the cart");
+        requireClose(MinecartSpeedManager.stableActivationHorizontalSpeed(4.0, 0.4), 0.4,
+            "a first-sample spike cannot launch the cart");
+        requireClose(
+            MinecartSpeedManager.initialActivationTrackSpeed(0.4, 0.4, false, 2.0, acceleration),
+            0.4 + acceleration,
+            "stored velocity 2.054 cannot override two actual 0.4 movement samples"
+        );
+        requireClose(
+            MinecartSpeedManager.initialActivationTrackSpeed(0.4, 0.4, true, 2.0, acceleration),
+            0.4 * SQRT_TWO + acceleration,
+            "slope activation converts the stable horizontal sample before acceleration"
+        );
+        requireClose(
+            MinecartSpeedManager.initialActivationTrackSpeed(1.0, 1.0, false, 2.0, acceleration),
+            1.0 + acceleration,
+            "two sustained legal high samples preserve the real entry speed"
+        );
+        requireClose(
+            MinecartSpeedManager.initialActivationTrackSpeed(5.0, 5.0, false, 4.0, acceleration),
+            5.0,
+            "a sustained speed above custom max is preserved for the later deceleration phase"
+        );
     }
 
     private static void testFixedTrackAcceleration() {
@@ -243,6 +317,14 @@ public final class SpeedProfileSelfTest {
             "slope track-to-horizontal factor is square root two");
 
         BlockPos rail = new BlockPos(10, 64, 20);
+        RailPathScanner.RailFrame flatFrame = new RailPathScanner.RailFrame(
+            0.5,
+            RailPathScanner.tangent(flatBack, flatForward),
+            flatBack,
+            flatForward
+        );
+        requireClose(RailGeometryMover.collisionPlaneY(rail, flatFrame), 64.0625,
+            "flat rail keeps its real rail collision height");
         Vec3i[][] slopes = {
             {new Vec3i(-1, -1, 0), new Vec3i(1, 0, 0)},
             {new Vec3i(1, -1, 0), new Vec3i(-1, 0, 0)},
@@ -250,6 +332,12 @@ public final class SpeedProfileSelfTest {
             {new Vec3i(0, -1, 1), new Vec3i(0, 0, -1)}
         };
         for (int index = 0; index < slopes.length; index++) {
+            RailPathScanner.RailFrame frame = new RailPathScanner.RailFrame(
+                0.5,
+                RailPathScanner.tangent(slopes[index][0], slopes[index][1]),
+                slopes[index][0],
+                slopes[index][1]
+            );
             Vec3d start = RailGeometryMover.pointOnRail(rail, slopes[index][0], slopes[index][1], 0.0);
             Vec3d middle = RailGeometryMover.pointOnRail(rail, slopes[index][0], slopes[index][1], 0.5);
             Vec3d end = RailGeometryMover.pointOnRail(rail, slopes[index][0], slopes[index][1], 1.0);
@@ -257,6 +345,8 @@ public final class SpeedProfileSelfTest {
             requireClose(middle.y - start.y, 0.5, "slope midpoint snaps by formula " + index);
             requireClose(end.subtract(start).length(), SQRT_TWO,
                 "slope centerline distance is square root two " + index);
+            requireClose(RailGeometryMover.collisionPlaneY(rail, frame), 65.0625,
+                "slope horizontal collision uses the highest rail plane " + index);
         }
     }
 
@@ -271,6 +361,74 @@ public final class SpeedProfileSelfTest {
             "deceleration is fully owned by the mod");
         require(MinecartSpeedManager.takeOverMovement(MinecartSpeedMode.BRAKE_HOLD),
             "brake hold is fully owned by the mod");
+    }
+
+    private static void testDiagnosticHelpers() {
+        require(!HighSpeedRailDiagnostics.validDuration(0),
+            "diagnostic duration rejects zero seconds");
+        require(HighSpeedRailDiagnostics.validDuration(1),
+            "diagnostic duration accepts one second");
+        require(HighSpeedRailDiagnostics.validDuration(60),
+            "diagnostic duration accepts sixty seconds");
+        require(!HighSpeedRailDiagnostics.validDuration(61),
+            "diagnostic duration rejects more than sixty seconds");
+        require(!HighSpeedRailDiagnostics.status().active(),
+            "diagnostics are disabled by default and do not create a session");
+
+        HighSpeedRailDiagnostics.DiagnosticStats stats =
+            HighSpeedRailDiagnostics.newStatsForTest();
+        stats.recordTick(
+            0.4,
+            0.4,
+            0.4,
+            MinecartSpeedMode.NORMAL,
+            MinecartSpeedMode.ACCELERATING,
+            RailGeometryMover.Outcome.MOVED
+        );
+        stats.recordTick(
+            2.0,
+            Math.sqrt(8.0),
+            4.0,
+            MinecartSpeedMode.ACCELERATING,
+            MinecartSpeedMode.NORMAL,
+            RailGeometryMover.Outcome.COLLISION
+        );
+        var summary = stats.json();
+        require(summary.get("ticks").getAsLong() == 2L,
+            "diagnostic summary counts ticks");
+        requireClose(summary.get("maxHorizontalDisplacement").getAsDouble(), 2.0,
+            "diagnostic summary records maximum horizontal displacement");
+        require(summary.get("collisions").getAsLong() == 1L,
+            "diagnostic summary counts collision outcomes");
+        require(summary.get("stateTransitions").getAsLong() == 2L,
+            "diagnostic summary counts state transitions");
+
+        var tick = HighSpeedRailDiagnostics.sampleTickForTest();
+        for (String required : new String[]{
+            "event", "serverTick", "headBefore", "headAfter",
+            "tailBefore", "tailAfter", "displacement", "movement"
+        }) {
+            require(tick.has(required), "diagnostic tick contains required field " + required);
+        }
+
+        MinecartSpeedState candidate = new MinecartSpeedState();
+        Vec3d direction = new Vec3d(1.0, 0.0, 0.0);
+        candidate.completeNormalTickSample(0.4, direction);
+        candidate.armActivationCandidate(direction);
+        candidate.completeNormalTickSample(0.4, direction);
+        var diagnosticState = HighSpeedRailDiagnostics.sampleStateForTest(candidate);
+        require(diagnosticState.get("activationSampleCount").getAsInt() == 2,
+            "diagnostics report the actual movement sample count");
+        requireClose(
+            diagnosticState.get("activationFirstActualHorizontalDistance").getAsDouble(),
+            0.4,
+            "diagnostics report the first actual movement sample"
+        );
+        requireClose(
+            diagnosticState.get("activationSecondActualHorizontalDistance").getAsDouble(),
+            0.4,
+            "diagnostics report the second actual movement sample"
+        );
     }
 
     private static ModConfig config(double maxSpeed, int activeBlocks, int seconds) {

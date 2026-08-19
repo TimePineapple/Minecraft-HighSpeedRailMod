@@ -3,8 +3,10 @@ package com.timepineapple.highspeedrail;
 import com.timepineapple.highspeedrail.command.HighSpeedRailCommand;
 import com.timepineapple.highspeedrail.config.ModConfig;
 import com.timepineapple.highspeedrail.minecart.PhysicsProfile;
+import com.timepineapple.highspeedrail.minecart.HighSpeedRailDiagnostics;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,8 +34,10 @@ public final class HighSpeedRail implements ModInitializer {
             );
         });
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            HighSpeedRailDiagnostics.onServerStopped(server);
             physicsProfile = PhysicsProfile.defaults(config);
         });
+        ServerTickEvents.END_SERVER_TICK.register(HighSpeedRailDiagnostics::onServerTick);
         LOGGER.info("highSpeedRail initialized (server-side only, Fabric Loader 0.19.3)");
     }
 
